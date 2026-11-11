@@ -74,6 +74,8 @@ UniXNU-pipa/
     ├── build-pipa-gpu-addon.py          # NativeAdrenoMetal bundle, trust bundle, NGPUADD2 addon
     ├── build-gop-legacy-display.py      # libNativeLegacyDisplay.late.a (display, touch, USB, battery)
     ├── check-pipa.py                    # Firmware preflight and boot DTB staging
+    ├── extract-pipa-firmware.py         # Host-side identity + firmware pull and SHA-256 manifest
+    ├── read-pipa-log.py                 # Ramoops reader over `fastboot boot`
     └── package.sh                       # UniXNU release wrapper (do not edit)
 ```
 
@@ -103,6 +105,28 @@ The archive builders need a few firmware files outside Git (paths are overridabl
 
 `proprietary-files.txt` lists the remaining Wi-Fi/Bluetooth images and marks the pipa-only digests as
 `UNMEASURED` until they are extracted and hashed.
+
+## Extracting Firmware From the Tablet
+
+The pipa-only files cannot be taken from another device or guessed. They are measured on the tablet itself,
+with Android booted and visible to `adb` — not in fastboot, which only exposes whole partitions:
+
+```sh
+python3 scripts/extract-pipa-firmware.py --out ~/pipa-firmware
+```
+
+It refuses to run unless `ro.product.device` is `pipa`, records `ro.build.fingerprint` and the related
+properties as provenance, pulls `/vendor/firmware`, `/vendor/firmware_mnt/image`, `/vendor/bt_firmware/image`
+and `/vendor/etc/wifi`, copies `/sys/firmware/fdt` when readable, and writes `manifest.json`/`manifest.tsv`
+with a SHA-256 per file. It also flags any pulled Adreno 650 file that disagrees with the digests already
+recorded here.
+
+A stock ROM is the preferred source: it gives reproducible digests and the `dtbo`/`vendor_boot` the UEFI build
+expects. If the tablet is on a custom ROM, keep its fingerprint in the manifest and treat the results as
+ROM-specific. The Novatek `NT36532` touch firmware is normally built into the stock kernel, so it comes from
+`vendor_boot`/`boot` (via `unpack_bootimg`), not from `/vendor`; the extractor leaves it `UNMEASURED` on
+purpose rather than recording a custom-kernel blob as stock. Replace `UNMEASURED` only with digests from this
+manifest.
 
 ## Boot Arguments
 
