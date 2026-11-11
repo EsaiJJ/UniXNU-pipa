@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SM8250 GCC registers used by UFS, transcribed from Linux gcc-sm8250.c.
-#ifndef J716F_UFS_GCC_UFS_H
-#define J716F_UFS_GCC_UFS_H
+#ifndef PIPA_UFS_GCC_UFS_H
+#define PIPA_UFS_GCC_UFS_H
 
 #define GCC_BASE                      0x00100000ULL
 #define GCC_UFS_BASE                  0x00177000ULL

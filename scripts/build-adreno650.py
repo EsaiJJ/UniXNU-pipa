@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build libAdreno650.a (NativeAdreno for SM8250 Adreno 650 + GMU + staged AGXAccelerator) for TB-J716F."""
+"""Build libAdreno650.a (NativeAdreno for SM8250 Adreno 650 + GMU + staged AGXAccelerator) for Xiaomi Pad 6 (pipa)."""
 import hashlib
 import json
 import os
@@ -15,14 +15,14 @@ PKG_REPO = next(
     (
         p for p in (
             ([Path(os.environ['UNIXNU_DEVICE'])] if os.environ.get('UNIXNU_DEVICE') else [])
-            + [Path(__file__).resolve().parents[1], Path('/home/test/tb-j716f-unixnu/sources/UniXNU-j716f')]
+            + [Path(__file__).resolve().parents[1]]
         )
         if (p / 'board.toml').is_file()
     ),
     ROOT,
 )
 UNIXNU_REPO = next(
-    (p for p in [ROOT, Path('/home/test/tb-j716f-unixnu/sources/UniXNU')] if (p / 'kits/AdrenoPM4').exists()),
+    (p for p in [ROOT] if (p / 'kits/AdrenoPM4').exists()),
     ROOT,
 )
 
@@ -69,7 +69,7 @@ for rel in ('drivers/Adreno650', 'drivers/AdrenoMetal', 'kits/ArmSmmu4K'):
 smmu_dir = PKG_REPO / 'kits/ArmSmmu4K' if (PKG_REPO / 'kits/ArmSmmu4K').exists() else (UNIXNU_REPO / 'kits/ArmSmmu4K')
 pm4_dir = UNIXNU_REPO / 'kits/AdrenoPM4'
 fw_dir = UNIXNU_REPO / 'kits/AdrenoFirmware'
-kit_dir = ROOT / 'kits/j716f' if (ROOT / 'kits/j716f').exists() else (PKG_REPO / 'package')
+kit_dir = ROOT / 'kits/pipa' if (ROOT / 'kits/pipa').exists() else (PKG_REPO / 'package')
 driver_dir = PKG_REPO / 'drivers/Adreno650' if (PKG_REPO / 'drivers/Adreno650').exists() else (ROOT / 'drivers/Adreno650')
 metal_dir = PKG_REPO / 'drivers/AdrenoMetal' if (PKG_REPO / 'drivers/AdrenoMetal').exists() else (UNIXNU_REPO / 'drivers/AdrenoMetal')
 

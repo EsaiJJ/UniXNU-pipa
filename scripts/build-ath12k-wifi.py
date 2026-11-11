@@ -8,10 +8,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kernel_target import TRIPLE
 
 tree = Path('.').resolve()
-if not (tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/kern_exec.o.json').exists():
-    cand = Path('/home/test/tb-j716f-unixnu/sources/UniXNU/out/j716f/ipados-17.7.11-21H461/j716f/tree')
-    if cand.exists():
-        tree = cand
 if len(sys.argv) > 1:
     module = Path(sys.argv[1]).resolve()
 elif len(tree.parents) >= 5 and (tree.parents[4] / 'drivers/Ath12kWifi').exists():
@@ -19,7 +15,7 @@ elif len(tree.parents) >= 5 and (tree.parents[4] / 'drivers/Ath12kWifi').exists(
 elif (tree / 'drivers/Ath12kWifi').exists():
     module = (tree / 'drivers/Ath12kWifi').resolve()
 else:
-    module = Path('/home/test/tb-j716f-unixnu/sources/UniXNU/drivers/Ath12kWifi').resolve()
+    raise SystemExit('Ath12kWifi module directory not found; pass it as the first argument')
 out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else (tree / 'build/native-legacy-display/ath12k-wifi').resolve()
 out.mkdir(parents=True, exist_ok=True)
 (out / 'build-report.json').unlink(missing_ok=True)

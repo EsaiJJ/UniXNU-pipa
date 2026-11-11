@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// No-op weak definitions of the probe hooks and diagnostic counters referenced by
-// XNU, BootRamoops, and NativeLegacyDisplay while optional components are unlinked.
+// No-op weak definitions of the probe hooks referenced by XNU, BootRamoops and NativeLegacyDisplay while optional
+// components are unlinked. The touch diagnostics live in package/TouchProbe.cpp and are not duplicated here.
 
 typedef unsigned int u32;
 typedef unsigned long long u64;
@@ -36,15 +36,6 @@ __attribute__((weak)) int boot_log_export_put(u32 generation, u32 total, u32 off
   (void)generation; (void)total; (void)offset; (void)data; (void)size;
   return -4;
 }
-
-// --- Touch Diagnostics (TouchProbe.cpp / BootRamoops.c) ---
-char native_touch_rows[4][120];
-volatile unsigned native_touch_stage = 0;
-volatile unsigned native_touch_stage_req = 0;
-volatile unsigned native_touch_stroke_count = 0;
-volatile int native_touch_strokes[16][7];
-char native_touch_trace[8][120];
-volatile int native_touch_extent[4];
 
 // --- Gestures Diagnostics (BootRamoops) ---
 __attribute__((weak)) char native_gesture_rows[8][120];

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Live USB CDC-ACM diagnostic terminal, ramoops streamer, GSC1 framebuffer capture,
-// and warm-fastboot reboot controller for Lenovo Xiaoxin Pad Pro 2021 (TB-J716F, SM8250).
+// and warm-fastboot reboot controller for the Xiaomi Pad 6 (pipa, SM8250).
 
 #include "UsbDebugCdc.h"
 #include "UsbDebugWire.h"
@@ -33,7 +33,7 @@ extern volatile uint32_t native_legacy_retirement_calls __attribute__((weak_impo
 extern volatile uint32_t native_gop_gpu_offers __attribute__((weak_import));
 extern volatile uint32_t native_gop_gpu_completions __attribute__((weak_import));
 
-extern volatile unsigned native_touch_stage __attribute__((weak_import));
+extern volatile unsigned native_touch_stage_done __attribute__((weak_import));
 extern volatile unsigned native_touch_stroke_count __attribute__((weak_import));
 extern char native_touch_rows[4][120] __attribute__((weak_import));
 
@@ -79,8 +79,8 @@ namespace {
 static const char *const kUsbStrings[4] = {
     "",
     "UniXNU",
-    "TB-J716F Debug CDC",
-    "J716FDBG01"
+    "Xiaomi Pad 6 Debug CDC",
+    "PIPADBG01"
 };
 
 static uint64_t nowMs() {
@@ -590,12 +590,12 @@ static void replayRamoops(TerminalSession &s, bool currentBootOnly) {
     if (!s.ramoops) return;
     volatile const uint32_t *hdr = reinterpret_cast<volatile const uint32_t *>(s.ramoops);
     const uint32_t sig = hdr[0], start = hdr[1], size = hdr[2];
-    if (sig != J716F_RAMOOPS_SIG || start >= J716F_RAMOOPS_DATA || size > J716F_RAMOOPS_DATA) return;
+    if (sig != PIPA_RAMOOPS_SIG || start >= PIPA_RAMOOPS_DATA || size > PIPA_RAMOOPS_DATA) return;
     s.lastRamoopsPos = start;
     if (size == 0u) return;
 
-    const volatile uint8_t *ring = s.ramoops + J716F_RAMOOPS_HEAD;
-    const uint32_t oldest = (size < J716F_RAMOOPS_DATA) ? 0u : start;
+    const volatile uint8_t *ring = s.ramoops + PIPA_RAMOOPS_HEAD;
+    const uint32_t oldest = (size < PIPA_RAMOOPS_DATA) ? 0u : start;
     uint32_t beginOff = 0u;
     if (currentBootOnly) {
         static const char kMarker[] = "boot_progress_init";
@@ -604,7 +604,7 @@ static void replayRamoops(TerminalSession &s, bool currentBootOnly) {
             const uint32_t base = pos - mLen;
             bool match = true;
             for (uint32_t k = 0; k < mLen; ++k) {
-                if (ring[(oldest + base + k) % J716F_RAMOOPS_DATA] != static_cast<uint8_t>(kMarker[k])) {
+                if (ring[(oldest + base + k) % PIPA_RAMOOPS_DATA] != static_cast<uint8_t>(kMarker[k])) {
                     match = false; break;
                 }
             }
@@ -619,12 +619,12 @@ static void replayRamoops(TerminalSession &s, bool currentBootOnly) {
     if (toSend > s.reply.freeBytes() - 256u) {
         beginOff = size - (s.reply.freeBytes() - 512u);
     }
-    s.reply.writeStr("\r\n[usb] === TB-J716F ramoops replay begin ===\r\n");
+    s.reply.writeStr("\r\n[usb] === Xiaomi Pad 6 ramoops replay begin ===\r\n");
     for (uint32_t i = beginOff; i < size; ++i) {
-        const uint8_t ch = ring[(oldest + i) % J716F_RAMOOPS_DATA];
+        const uint8_t ch = ring[(oldest + i) % PIPA_RAMOOPS_DATA];
         (void)s.reply.write(&ch, 1u);
     }
-    s.reply.writeStr("\r\n[usb] === TB-J716F ramoops replay end ===\r\n");
+    s.reply.writeStr("\r\n[usb] === Xiaomi Pad 6 ramoops replay end ===\r\n");
 }
 
 static void handleCommand(TerminalSession &s, const char *raw) {
@@ -633,7 +633,7 @@ static void handleCommand(TerminalSession &s, const char *raw) {
     char buf[512];
 
     if (strEq(raw, "ping")) {
-        s.reply.writeStr("[usb] PONG TB-J716F\r\n");
+        s.reply.writeStr("[usb] PONG Xiaomi Pad 6\r\n");
     } else if (strEq(raw, "features")) {
         s.reply.writeStr("FEATURES: ping status info uptime bootargs display usb touch gpu.status wifi.status bt.status replay screen.snapshot screen.start screen.stop screen.configure reboot.fastboot\r\n");
     } else if (strEq(raw, "help")) {
@@ -642,12 +642,12 @@ static void handleCommand(TerminalSession &s, const char *raw) {
         const uint32_t cpus = &armcpu_smp_running ? armcpu_smp_running : 0u;
         const uint64_t ms = nowMs();
         snprintf(buf, sizeof(buf),
-                 "[usb] board=TB-J716F soc=SM8250 uptime=%llu.%03llus cpus=%u usb_events=%u resets=%u\r\n",
+                 "[usb] board=Xiaomi Pad 6 soc=SM8250 uptime=%llu.%03llus cpus=%u usb_events=%u resets=%u\r\n",
                  ms / 1000ULL, ms % 1000ULL, cpus, s.hw.usbEvents, s.hw.usbResets);
         s.reply.writeStr(buf);
-        if (&native_touch_stage) {
+        if (&native_touch_stage_done) {
             snprintf(buf, sizeof(buf), "[usb] TOUCH: stage=%u strokes=%u %s\r\n",
-                     native_touch_stage, &native_touch_stroke_count ? native_touch_stroke_count : 0u,
+                     native_touch_stage_done, &native_touch_stroke_count ? native_touch_stroke_count : 0u,
                      &native_touch_rows ? native_touch_rows[0] : "");
             s.reply.writeStr(buf);
         }
@@ -718,7 +718,7 @@ static void handleCommand(TerminalSession &s, const char *raw) {
         }
     } else if (strEq(raw, "touch") || strEq(raw, "touch.status")) {
         snprintf(buf, sizeof(buf), "[usb] TOUCH: stage=%u strokes=%u\r\n",
-                 &native_touch_stage ? native_touch_stage : 0u,
+                 &native_touch_stage_done ? native_touch_stage_done : 0u,
                  &native_touch_stroke_count ? native_touch_stroke_count : 0u);
         s.reply.writeStr(buf);
         if (&native_touch_rows) {
@@ -1005,11 +1005,11 @@ __attribute__((noreturn)) static void executeWarmFastbootReboot(UsbHw &hw) {
 
     // PM8150 PON_SOFT_RB_SPARE (0x8F) is already programmed to PON_REASON_BOOTLOADER (0x04)
     // with warm-reset retention by prepare_warm_fastboot() in BootRamoops.c.
-    // On Lenovo TB-J716F, IMEM 0x146BF65C is TZ XPU-protected and SCM_HALT_PMIC_ARB hangs;
+    // On the Xiaomi Pad 6, IMEM 0x146BF65C is TZ XPU-protected and SCM_HALT_PMIC_ARB hangs;
     // PSCI_SYSTEM_RESET (0x84000009) performs a direct warm reset into Fastboot.
     __asm__ volatile("msr daifset, #3" ::: "memory");
     {
-        register uint64_t x0 __asm__("x0") = J716F_PSCI_SYSTEM_RESET;
+        register uint64_t x0 __asm__("x0") = PIPA_PSCI_SYSTEM_RESET;
         register uint64_t x1 __asm__("x1") = 0;
         register uint64_t x2 __asm__("x2") = 0;
         register uint64_t x3 __asm__("x3") = 0;
@@ -1053,7 +1053,7 @@ static bool bringUpController(TerminalSession &s) {
 
     if (!hw.core) {
         hw.core = reinterpret_cast<volatile uint32_t *>(
-            mapRangeUncached(J716F_USB0_CORE_BASE, J716F_USB0_CORE_SIZE, hw.coreMap));
+            mapRangeUncached(PIPA_USB0_CORE_BASE, PIPA_USB0_CORE_SIZE, hw.coreMap));
         if (!hw.core) {
             logStage("usb: core map failed");
             return false;
@@ -1182,7 +1182,7 @@ static void usbDebugThread(void *arg, int waitResult) {
     s->reply.reset();
     s->screen.init(static_cast<uint8_t *>(s->rgbMem->getBytesNoCopy()), kRgbBytes);
     s->ramoops = reinterpret_cast<volatile const uint8_t *>(
-        mapRangeUncached(J716F_RAMOOPS_BASE, J716F_RAMOOPS_SIZE, s->ramoopsMap));
+        mapRangeUncached(PIPA_RAMOOPS_BASE, PIPA_RAMOOPS_SIZE, s->ramoopsMap));
 
     if (!bringUpController(*s)) return;
     gSession = s;
@@ -1254,17 +1254,17 @@ static void usbDebugThread(void *arg, int waitResult) {
                 } else if (s->ramoops) {
                     volatile const uint32_t *hdr = reinterpret_cast<volatile const uint32_t *>(s->ramoops);
                     const uint32_t sig = hdr[0], start = hdr[1];
-                    if (sig == J716F_RAMOOPS_SIG && start < J716F_RAMOOPS_DATA && start != s->lastRamoopsPos) {
-                        const volatile uint8_t *ring = s->ramoops + J716F_RAMOOPS_HEAD;
+                    if (sig == PIPA_RAMOOPS_SIG && start < PIPA_RAMOOPS_DATA && start != s->lastRamoopsPos) {
+                        const volatile uint8_t *ring = s->ramoops + PIPA_RAMOOPS_HEAD;
                         uint32_t avail = (start >= s->lastRamoopsPos)
                             ? (start - s->lastRamoopsPos)
-                            : (J716F_RAMOOPS_DATA - s->lastRamoopsPos);
+                            : (PIPA_RAMOOPS_DATA - s->lastRamoopsPos);
                         if (avail > DMA_EP3_MAX_CHUNK) avail = DMA_EP3_MAX_CHUNK;
                         for (uint32_t i = 0; i < avail; ++i) {
                             txScratch[i] = ring[s->lastRamoopsPos + i];
                         }
                         if (startBulkIn(s->hw, txScratch, avail)) {
-                            s->lastRamoopsPos = (s->lastRamoopsPos + avail) % J716F_RAMOOPS_DATA;
+                            s->lastRamoopsPos = (s->lastRamoopsPos + avail) % PIPA_RAMOOPS_DATA;
                         }
                     }
                 }
@@ -1325,7 +1325,7 @@ extern "C" void native_usb_debug_probe(void) {
     static int started = 0;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_ACQ_REL)) return;
     unsigned enable = 1;
-    (void)PE_parse_boot_argn("j716f-usb", &enable, sizeof(enable));
+    (void)PE_parse_boot_argn("pipa-usb", &enable, sizeof(enable));
     if (!enable) return;
     usbVoteRpmhRailsOnce();
     thread_t th = nullptr;

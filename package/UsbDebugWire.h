@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Pure protocol helpers for TB-J716F USB CDC-ACM diagnostic terminal:
+// Pure protocol helpers for Xiaomi Pad 6 USB CDC-ACM diagnostic terminal:
 //   1. Driverless Windows 10/11 usbser.sys CDC-ACM USB descriptors (HS 512B / FS 64B)
 //   2. IEEE 802.3 CRC-32 matching Python binascii.crc32
 //   3. GSC1 RGB565 frame packet header builder matching UniXNU scripts/debug_screen.py
 
-#ifndef J716F_USB_DEBUG_WIRE_H
-#define J716F_USB_DEBUG_WIRE_H
+#ifndef PIPA_USB_DEBUG_WIRE_H
+#define PIPA_USB_DEBUG_WIRE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -100,4 +100,4 @@ static inline void usb_gsc1_header(uint8_t out[44], uint32_t frameId, uint32_t f
     usb_put_le32(out + 40, usb_crc32(out + 8, 32));
 }
 
-#endif // J716F_USB_DEBUG_WIRE_H
+#endif // PIPA_USB_DEBUG_WIRE_H

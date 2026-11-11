@@ -1,4 +1,4 @@
-# Board-local XNU fixes for TB-J716F
-j716f-throttle-and-verbose-console.patch
-j716f-cryptex-os-view-always.patch
-j716f-appsync-and-sandbox-wildcard.patch
+# Board-local XNU fixes for the Xiaomi Pad 6 (pipa)
+pipa-throttle-and-verbose-console.patch
+pipa-cryptex-os-view-always.patch
+pipa-appsync-and-sandbox-wildcard.patch

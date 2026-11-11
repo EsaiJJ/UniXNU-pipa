@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Bounded command & GSC1 framebuffer capture engine for TB-J716F USB CDC terminal.
+// Bounded command & GSC1 framebuffer capture engine for Xiaomi Pad 6 USB CDC terminal.
 // Included by UsbDebugCdc.cpp inside its anonymous namespace.
 
-#ifndef J716F_USB_DEBUG_COMMANDS_H
-#define J716F_USB_DEBUG_COMMANDS_H
+#ifndef PIPA_USB_DEBUG_COMMANDS_H
+#define PIPA_USB_DEBUG_COMMANDS_H
 
 struct UsbReplyRing {
     uint8_t *buf;
@@ -181,4 +181,4 @@ static void usbQueueGsc1Stop(UsbScreenState &sc, UsbReplyRing &reply) {
     (void)reply.write(hdr, 44u);
 }
 
-#endif // J716F_USB_DEBUG_COMMANDS_H
+#endif // PIPA_USB_DEBUG_COMMANDS_H

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Lenovo Xiaoxin Pad Pro 2021 (TB-J716F, SM8250 "kona") USB0 DWC3 + 7nm Femto v2 HS PHY
+// Xiaomi Pad 6 (pipa, SM8250 "kona") USB0 DWC3 + 7nm Femto v2 HS PHY
 // register definitions for the live XNU USB CDC-ACM diagnostic terminal.
-// Verified against j716f.dtb (ssusb@a600000, hsphy@88e3000) and Kona ClockDxe.
+// Verified against pipa.dtb (ssusb@a600000, hsphy@88e3000) and Kona ClockDxe.
 
-#ifndef J716F_USB_DEBUG_CDC_H
-#define J716F_USB_DEBUG_CDC_H
+#ifndef PIPA_USB_DEBUG_CDC_H
+#define PIPA_USB_DEBUG_CDC_H
 
 #include <stdint.h>
 
@@ -19,49 +19,49 @@ void native_usb_debug_probe(void);
 #endif
 
 // --- SM8250 USB0 / SMMU / EUD+HSPHY / GCC physical geometry ----------------
-#define J716F_USB0_CORE_BASE          0x0A600000ULL
-#define J716F_USB0_CORE_SIZE          0x00100000ULL
-#define J716F_USB0_SMMU_SID_0         0x0000u
-#define J716F_USB0_SMMU_SID_1         0x0001u
-#define J716F_TOUCH_SMMU_SID          0x0043u
-#define J716F_UFS_SMMU_SID            0x0060u
-#define J716F_MDSS_SMMU_SID           0x0800u
-#define J716F_APPS_SMMU_BASE          0x15000000ULL
-#define J716F_APPS_SMMU_SIZE          0x00100000ULL
+#define PIPA_USB0_CORE_BASE          0x0A600000ULL
+#define PIPA_USB0_CORE_SIZE          0x00100000ULL
+#define PIPA_USB0_SMMU_SID_0         0x0000u
+#define PIPA_USB0_SMMU_SID_1         0x0001u
+#define PIPA_TOUCH_SMMU_SID          0x0043u
+#define PIPA_UFS_SMMU_SID            0x0060u
+#define PIPA_MDSS_SMMU_SID           0x0800u
+#define PIPA_APPS_SMMU_BASE          0x15000000ULL
+#define PIPA_APPS_SMMU_SIZE          0x00100000ULL
 
 // hsphy@88e3000 ("qcom,usb-hsphy-snps-femto") and non-secure eud_mode_mgr@88e1000.
 // Never map or read 0x088e2000..0x088e2fff (eud_mode_mgr2 is qcom,secure-eud-en XPU-locked)!
-#define J716F_EUD_BASE                0x088E1000ULL
-#define J716F_EUD_SIZE                0x00001000ULL
+#define PIPA_EUD_BASE                0x088E1000ULL
+#define PIPA_EUD_SIZE                0x00001000ULL
 #define EUD_SW_ATTACH_DET             0x0018u
-#define J716F_HSPHY_BASE              0x088E3000ULL
-#define J716F_HSPHY_SIZE              0x00001000ULL
+#define PIPA_HSPHY_BASE              0x088E3000ULL
+#define PIPA_HSPHY_SIZE              0x00001000ULL
 
-// RPMh AOP cmd-db & apps_rsc drv-2 (j716f.dtb)
-#define J716F_CMD_DB_BASE             0x80860000ULL
-#define J716F_CMD_DB_SIZE             0x00020000ULL
-#define J716F_RSC_DRV_BASE            0x18220000ULL
-#define J716F_RSC_DRV_SIZE            0x00010000ULL
-#define J716F_RSC_TCS_OFFSET          0x0D00u
+// RPMh AOP cmd-db & apps_rsc drv-2 (pipa.dtb)
+#define PIPA_CMD_DB_BASE             0x80860000ULL
+#define PIPA_CMD_DB_SIZE             0x00020000ULL
+#define PIPA_RSC_DRV_BASE            0x18220000ULL
+#define PIPA_RSC_DRV_SIZE            0x00010000ULL
+#define PIPA_RSC_TCS_OFFSET          0x0D00u
 
 // Ramoops DBGC persistent ring (BootRamoops.c) & warm-fastboot registers
-#define J716F_RAMOOPS_BASE            0xB0000000ULL
-#define J716F_RAMOOPS_SIZE            0x00080000ULL
-#define J716F_RAMOOPS_SIG             0x43474244u  // "DBGC"
-#define J716F_RAMOOPS_HEAD            12u
-#define J716F_RAMOOPS_DATA            (J716F_RAMOOPS_SIZE - J716F_RAMOOPS_HEAD)
+#define PIPA_RAMOOPS_BASE            0xB0000000ULL
+#define PIPA_RAMOOPS_SIZE            0x00080000ULL
+#define PIPA_RAMOOPS_SIG             0x43474244u  // "DBGC"
+#define PIPA_RAMOOPS_HEAD            12u
+#define PIPA_RAMOOPS_DATA            (PIPA_RAMOOPS_SIZE - PIPA_RAMOOPS_HEAD)
 
-#define J716F_PS_HOLD_PHYS            0x00C26000ULL
-#define J716F_IMEM_REASON_PAGE        0x146BF000ULL
-#define J716F_IMEM_REASON_OFFSET      0x0850u
-#define J716F_RESTART_BOOTLOADER      0x77665500u
-#define J716F_SCM_WDOG_DEBUG_OFF      0xC2000109ULL
-#define J716F_SCM_HALT_PMIC_ARB       0xC2000901ULL
-#define J716F_PSCI_SYSTEM_RESET       0x84000009ULL
+#define PIPA_PS_HOLD_PHYS            0x00C264000ULL
+#define PIPA_IMEM_REASON_PAGE        0x146BF000ULL
+#define PIPA_IMEM_REASON_OFFSET      0x0850u
+#define PIPA_RESTART_BOOTLOADER      0x77665500u
+#define PIPA_SCM_WDOG_DEBUG_OFF      0xC2000109ULL
+#define PIPA_SCM_HALT_PMIC_ARB       0xC2000901ULL
+#define PIPA_PSCI_SYSTEM_RESET       0x84000009ULL
 
 // --- SM8250 GCC (0x00100000) USB30_PRIM & QUSB2PHY offsets -----------------
-#define J716F_GCC_BASE                0x00100000ULL
-#define J716F_GCC_SIZE                0x00100000ULL
+#define PIPA_GCC_BASE                0x00100000ULL
+#define PIPA_GCC_SIZE                0x00100000ULL
 
 #define GCC_GPLL0_MODE                0x00000u
 #define GCC_APCS_GPLL_ENA_VOTE        0x52000u
@@ -100,7 +100,7 @@ void native_usb_debug_probe(void);
 #define FEMTO_CTRL1                   0x60u
 #define FEMTO_CTRL2                   0x64u
 #define FEMTO_PARAM_OVRD_X0           0x6Cu
-#define FEMTO_PARAM_OVRD_X1           0x70u  // j716f.dtb: qcom,param-override-seq = <0x83 0x70>
+#define FEMTO_PARAM_OVRD_X1           0x70u  // pipa.dtb: qcom,param-override-seq = <0x83 0x70>
 #define FEMTO_PARAM_OVRD_X2           0x74u
 #define FEMTO_PARAM_OVRD_X3           0x78u
 #define FEMTO_CHARGING_DET_CTRL       0x80u
@@ -229,4 +229,4 @@ void native_usb_debug_probe(void);
 #define DWC3_DEV_EVENT_CONNECT_DONE   2u
 #define DWC3_DEV_EVENT_LINK_STATUS    3u
 
-#endif // J716F_USB_DEBUG_CDC_H
+#endif // PIPA_USB_DEBUG_CDC_H

@@ -195,7 +195,7 @@ static int sample_temp(battery_sample *s) {
         if (!srma) {
             int centi = battery_temp_millic(first) / 10;
             if (centi < 500 || centi > 5500) {
-                // A plausible pack on TB-J716F is 5..55 C; SRAM word 328 on TB-J716F reads ~70.25 C (wrong word).
+                // A plausible pack on the Xiaomi Pad 6 is 5..55 C; SRAM word 328 reads ~70.25 C (wrong word).
                 log_temp_raw(first, centi);
                 srma = -7;
             } else {
@@ -516,7 +516,7 @@ extern "C" void native_battery_probe(void) {
     static int started;
     if (started) return;
     unsigned mode = 1;
-    if (PE_parse_boot_argn("j716f-battery", &mode, sizeof mode) ||
+    if (PE_parse_boot_argn("pipa-battery", &mode, sizeof mode) ||
         PE_parse_boot_argn("pipa-battery", &mode, sizeof mode)) gMode = mode;
     if (!gMode || gMode > 2) return;
     started = 1;

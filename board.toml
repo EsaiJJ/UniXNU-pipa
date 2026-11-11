@@ -2,27 +2,34 @@ schema_version = 2
 
 [board]
 example = false
-name = "j716f"
-kit = "j716f"
+name = "pipa"
+kit = "pipa"
 soc = "SM8250"
 soc_source = "sm8250"
 os_profile = "ipados-17.7.11-21H461"
-description = "Lenovo Xiaoxin Pad Pro 2021 TB-J716F UniXNU bring-up"
+description = "Xiaomi Pad 6 (pipa, SM8250-AC) UniXNU bring-up"
 
+# Android's userdata (sda34 on the UFS LUN 0), from the tablet's GPT. The windows are those of UniXNU-sheng: the same target
+# image. "unixnu build userdata" writes the image for it; flashing it erases Android's data.
 [userdata]
-first_lba = 2315048
-last_lba = 30693370
+first_lba = 0x293000
+last_lba = 0x1d387fa
 lba_bytes = 4096
+windows = [
+  { name = "OS", component = "OS" },
+  { name = "SystemOS", component = "Cryptex1,SystemOS" },
+]
 
 [package]
 unixnu = "../UniXNU"
 
 [package.defconfig]
-"ipados-17.7.11-21H461" = "j716f_defconfig"
+"ipados-17.7.11-21H461" = "pipa_defconfig"
 
 [components]
-# Native platform mainline components aligned with UniXNU component catalog
-include = ["XnuPrelink", "DarwinBoot", "ArmDTPlatform", "ArmCpu", "SoftwareAES", "RamBlock", "VirtioMmioBlock", "VerifiedRoot", "ShengUfs", "GopFramebuffer", "AppleKeyStoreState", "ShengHidInput", "AdrenoPM4", "AdrenoFirmware", "ArmSmmu4K", "AirNir", "Ath12kWifi", "QcaBluetooth"]
+# Native platform mainline components aligned with UniXNU component catalog. QcomGeniSpi and ShengNovatekTouch are the pipa
+# touch transport and protocol; the Wi-Fi/Bluetooth components stay listed but their boot arguments are default-off below.
+include = ["XnuPrelink", "DarwinBoot", "ArmDTPlatform", "ArmCpu", "SoftwareAES", "RamBlock", "VirtioMmioBlock", "VerifiedRoot", "ShengUfs", "GopFramebuffer", "AppleKeyStoreState", "ShengHidInput", "AdrenoPM4", "AdrenoFirmware", "ArmSmmu4K", "AirNir", "Ath12kWifi", "QcaBluetooth", "QcomGeniSpi", "ShengNovatekTouch"]
 
 [ipsw]
 url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
@@ -34,8 +41,12 @@ chip_id = 0x8011
 board_id = 12
 fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
 
+[ipsw.sha256]
+"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
+"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+
 [kernel]
-defconfig = "j716f_defconfig"
+defconfig = "pipa_defconfig"
 config_fragments = [
   "arch:configs/common.config",
   "soc:configs/sm8250.config",
@@ -53,7 +64,10 @@ archives = [
   "component:SoftwareAES",
   "build-software-aes-bindings.py",
   "component:RamBlock",
-  "component:VirtioMmioBlock",
+  # The verified variant of the read-only block transport (CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE) and the owner key it
+  # authenticates against; no virtio device exists on pipa, so the transport itself never configures.
+  "build-arm-driver.py VirtioMmioBlock --verified-root",
+  "build-verified-root-key.py --pin 70a5ea346d2d779a7ef43eb4ed8b17f54488e160d8c2a6d6420969664e3ae798",
   "component:ShengUfs",
   "component:AppleKeyStoreState",
   "component:ShengHidInput",
@@ -64,9 +78,9 @@ archives = [
   "build-platform-power.py",
   "build-boot-progress.py",
   "build-adreno650.py",
-  "build-j716f-gpu-addon.py",
+  "build-pipa-gpu-addon.py",
   "build-gop-legacy-display.py",
-  "check-j716f.py",
+  "check-pipa.py",
 ]
 
 [kernel.prelink]
@@ -113,29 +127,40 @@ roots = [
 ]
 
 [device_tree]
-source = "device:dts/j716f.dts"
+source = "device:dts/pipa.dts"
 include_dirs = ["soc:dts"]
 
+# The firmware is the Mu-Silicium pipa branch (pipaPkg, Kona SM8250), with UniXNU, the ramdisk block device driver and
+# DarwinBoot added. It keeps the upstream vendor driver set, which upstream lists as working for display, internal storage
+# and the side buttons. Resources/DTBs/pipa.dtb already carries /reserved-memory/cont_splash_region@9c000000.
 [firmware]
-config = "j716f"
-dsc = "Platforms/Lenovo/j716fPkg/j716f.dsc"
-fd = "Build/j716fPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-preflight = ["scripts/check-j716f.py"]
+config = "pipa"
+dsc = "Platforms/Xiaomi/pipaPkg/pipa.dsc"
+fd = "Build/pipaPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+preflight = ["scripts/check-pipa.py"]
+submodules = ["Binaries", "Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
+patches = ["Resources/MuPatches/Gic-Spurious.patch"]
 packages = [
   "{uefi}",
-  "{uefi}/Platforms/Lenovo",
-  "{uefi}/Common/Mu",
-  "{uefi}/Common/Mu_OEM_Sample",
-  "{edk2}",
-  "{uefi}/Silicon/Qualcomm",
-  "{uefi}/Silicon/Silicium",
+  "{uefi}/Platforms/Xiaomi",
   "{tree}/package",
   "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+  "{uefi}/Common/Mu",
+  "{uefi}/Common/Mu_OEM_Sample",
+  "{uefi}/Silicon/Qualcomm",
+  "{uefi}/Silicon/Silicium",
+  "{uefi}/Silicium-ACPI",
+  "{uefi}/Silicium-ACPI/Platforms/Xiaomi",
+  "{uefi}/Silicium-ACPI/Silicon/Qualcomm",
 ]
 
 [firmware.defines]
-ENABLE_SECUREBOOT = 0
-DEVICE_MODEL = "j716f"
+ENABLE_SECUREBOOT = "1"
+MEMORY_PROTECTION = "TRUE"
+SHIP_MODE = "FALSE"
+BUILDID_STRING = "pipa-research"
+DEVICE_MODEL = "pipa"
 
 [adt.defaults.u32]
 vmm-present = 1
@@ -166,16 +191,23 @@ button-names = ["hold", "voldown", "volup"]
 [adt.buttons.u32]
 home-button-type = 2
 
+# The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional trust cache
+# and Data seed. DarwinBoot is part of the firmware volume.
+#
+# This tablet was upgraded to 16 GB in the measured unit. Android's /memory has the banks 0x80000000+0x37700000,
+# 0xc0000000+0x1c0000000 and 0x800000000+0x200000000: the added 8 GiB is a bank of its own at 32 GiB. XNU takes dram-base
+# and dram-size as one range (is_dram_addr, which only picks the attribute of device mappings), so it spans from the base to
+# the end of the last bank; every register block lies below 0x80000000.
 [payload]
-volume = "J716FNATIVE"
-size_mib = 80
+volume = "PIPAESP"
+size_mib = 192
 loader = "firmware"
-title = "Lenovo Pad Pro 2021 (iPadOS 17.7.11)"
-dram_size = "0x140000000"
+title = "Xiaomi Pad 6 (iPadOS 17.7.11)"
+dram_size = "0x980000000"
 timeout = 3
 kernel_args = [
   "-v",
-  "serial=0",
+  "serial=3",
   "debug=0x14e",
   "sheng-smp=1",
   "armcpu-self-ipi=1",
@@ -187,16 +219,11 @@ kernel_args = [
   "-no_slto_panic",
   "ml-timeout-lock-panic-scale=40",
   "native-ufs-root=1",
+  "native-ufs-diagnostics=1",
   "sheng-data-persist=2",
-  "-apfs_shared_datavolume",
   "sheng-disable-watchdogd=1",
-  "sheng-lite=1",
-  "sheng-no-lc=1",
-  "sched_preemption_disable_debug_mode=1",
-  "interrupt-masked-debug-mode=1",
-  "boot-progress=2",
-  "offline-key-events=1",
   "-no_corpses",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
   "offline-mobile-graphics-load=1",
   "offline-legacy-register=1",
   "offline-legacy-phase=4",
@@ -206,28 +233,23 @@ kernel_args = [
   "offline-legacy-validate=1",
   "offline-legacy-transfer=1",
   "offline-legacy-cpu-present=1",
-  "sheng-vsync=60",
-  "sheng-vsync-fixed=1",
+  "offline-key-events=1",
   "sheng-aks=1",
-  "sheng-aks-sls=3",
   "offline-hid-input=1",
   "offline-hid-home=1",
   "sheng-touch-hid=1",
-  "j716f-touch=1",
-  "j716f-usb=1",
+  "sheng-vsync=60",
+  "sheng-vsync-fixed=1",
+  "pipa-restart-after=240",
+  "pipa-panic-restart-after=10",
+  "pipa-restart-crashes=3",
+  "pipa-touch=5",
+  "pipa-buttons=1",
+  "pipa-cpufreq=1",
   "pipa-gpu=12",
   "sheng-gpu-addon=1",
   "sheng-fb-gpu=1",
-  "sheng-tum=s",
-  "pipa-cpufreq=4",
-  "pipa-buttons=1",
   "pipa-wd=0",
-  "sheng-wifi=4",
-  "sheng-bluetooth=1",
-  "pipa-gpu-dcvs=1",
-  "sheng-backlight=1",
-  "owner-staged-apps=1",
-  "appsync=1",
 ]
 tools = true
 panic_screen = true
@@ -252,9 +274,9 @@ confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
 [payload.adt]
 chip_id = "8011"
 unique_chip_id = "required"
-owned_memory_size = "0xE0000000"
+owned_memory_size = "0x170000000"
 dram_base = "0x80000000"
-dram_size = "0x140000000"
+dram_size = "0x980000000"
 psci_method = "smc"
 ipad_identity = true
 packed_data_ramdisk = true
@@ -262,13 +284,11 @@ persistent_data = true
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 
 [bootimg]
-dtb = "build/j716f/j716f.dtb"
+dtb = "build/pipa/pipa.dtb"
 
 [bootimg.image]
-base = 0
+base = 0x10000000
 kernel_offset = 0x8000
-ramdisk_offset = 0x1000000
 tags_offset = 0x100
-dtb_offset = 0x1f00000
-pagesize = 4096
-header_version = 2
+pagesize = 2048
+header_version = 1

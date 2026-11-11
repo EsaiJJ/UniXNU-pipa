@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SM8250 (TB-J716F) USB device controller behind Apple's native iPadOS 17.7.11 (21H461) USB stack.
+// SM8250 (Xiaomi Pad 6) USB device controller behind Apple's native iPadOS 17.7.11 (21H461) USB stack.
 // Subclasses AppleUSBXDCI and publishes an IOUSBDeviceController instance matched by AppleUSBDeviceMux,
 // configd (USBDeviceConfiguration), and lockdownd (enumerating as Apple iPad 05ac:12ab).
 
@@ -38,7 +38,7 @@ namespace {
 
 #include "UsbDebugHw.h"
 
-constexpr uint64_t kCore = J716F_USB0_CORE_BASE;         // 0x0a600000
+constexpr uint64_t kCore = PIPA_USB0_CORE_BASE;         // 0x0a600000
 constexpr uint64_t kAppleWindow = kCore + 0xc000;        // 0x0a60c000
 constexpr uint64_t kQscratch = kCore + 0xf8800;          // 0x0a6f8800
 constexpr uint64_t kSmmuBase = 0x15000000ULL;            // Apps SMMUv2
@@ -158,7 +158,7 @@ static bool smmuIdentity() {
                 break;
             }
         }
-        if (!hitsProtected && ((smr ^ J716F_USB0_SMMU_SID_0) & 0x7fffu & ~mask) == 0u) {
+        if (!hitsProtected && ((smr ^ PIPA_USB0_SMMU_SID_0) & 0x7fffu & ~mask) == 0u) {
             if (usbSlot == 0xffffffffu) {
                 usbSlot = i;
                 continue;

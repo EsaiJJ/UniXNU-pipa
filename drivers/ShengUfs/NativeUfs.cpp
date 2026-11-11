@@ -40,7 +40,7 @@ extern const uint8_t verified_root_key[];
 #include "RootDiagnostics.h"
 #include "TransferPoll.h"
 #include "SmmuTakeover.h"
-#include "J716FSmmuTakeover.h"
+#include "PipaSmmuTakeover.h"
 
 static UfsRootDiagnostics gRootDiagnostic;
 static bool gRootDiagnosticEnabled;
@@ -1141,7 +1141,7 @@ static void hostSlotsUpgrade (unsigned regionSlots, unsigned entries, bool wide)
 }
 
 // Bring the live controller up for reading:
-#include "J716FNativeUfsHost.inc"
+#include "PipaNativeUfsHost.inc"
 }
 
 namespace {
@@ -2420,7 +2420,7 @@ void NativeUfs::stop (IOService *provider)
 
 
 // ============================================================================
-// SourceRootBinding & SystemOS Union Mount Support for J716F Bring-up
+// SourceRootBinding & SystemOS Union Mount Support for pipa Bring-up
 // ============================================================================
 #include <IOKit/IOBSD.h>
 #include <sys/param.h>

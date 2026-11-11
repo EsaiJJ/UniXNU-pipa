@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Build NativeAdrenoMetal.bundle, owner-trust.bundle, and gpu-addon-clients.bin (NGPUADD2) for TB-J716F.
+"""Build NativeAdrenoMetal.bundle, owner-trust.bundle, and gpu-addon-clients.bin (NGPUADD2) for Xiaomi Pad 6 (pipa).
 
-Runs inside the assembled UniXNU build tree (out/j716f/.../tree) as part of [kernel] archives,
+Runs inside the assembled UniXNU build tree (out/pipa/.../tree) as part of [kernel] archives,
 producing:
   - build/adreno-metal-plugin/NativeAdrenoMetal.bundle
   - build/adreno-metal-plugin/trust.json
@@ -26,17 +26,17 @@ PKG_REPO = next(
     (
         p for p in (
             ([Path(os.environ['UNIXNU_DEVICE'])] if os.environ.get('UNIXNU_DEVICE') else [])
-            + [Path(__file__).resolve().parents[1], Path('/home/test/tb-j716f-unixnu/sources/UniXNU-j716f')]
+            + [Path(__file__).resolve().parents[1]]
         )
         if (p / 'board.toml').is_file()
     ),
     ROOT,
 )
 UNIXNU_REPO = next(
-    (p for p in [ROOT, Path('/home/test/tb-j716f-unixnu/sources/UniXNU')] if (p / 'kits/AdrenoPM4').exists()),
+    (p for p in [ROOT] if (p / 'kits/AdrenoPM4').exists()),
     ROOT,
 )
-GPU_WORK = Path(os.environ.get('UNIXNU_GPU_WORK', '/home/test/tb-j716f-unixnu/gpu-userspace-work'))
+GPU_WORK = Path(os.environ.get('UNIXNU_GPU_WORK', '.cache/gpu-userspace-work'))
 CLIENTS_DEFAULT = os.environ.get('UNIXNU_GPU_CLIENTS', 'iconservicesagent,Preferences')
 
 
@@ -115,7 +115,7 @@ def main() -> int:
         (orig_trust_path, 'original-static-system.bundle'),
     ):
         if not required.exists():
-            print(f'SKIP build-j716f-gpu-addon: missing {label} at {required}')
+            print(f'SKIP build-pipa-gpu-addon: missing {label} at {required}')
             return 0
 
     gen_shaders = next(

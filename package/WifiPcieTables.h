@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SM8250 PCIe0 QMP PHY (Gen3 x1, 0x01c06000, size 0x1000) init values from sm8250-lenovo-tb-j716f.dtb.
+// SM8250 PCIe0 QMP PHY (Gen3 x1, 0x01c06000, size 0x1000) init values from pipa.dtb.
 // Block offsets: serdes 0x0, tx 0x200, rx 0x400, pcs 0x800, pcs_misc 0xc00.
 // Control registers: sw_reset 0x800, pcs_status1 0x814 (bit 6 PHYSTATUS), power_down_control 0x840, start_control 0x844.
 #pragma once

@@ -8,11 +8,6 @@ import subprocess
 import sys
 
 tree = Path('.').resolve()
-if not (tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/kern_exec.o.json').exists():
-    cand = Path('/home/test/tb-j716f-unixnu/sources/UniXNU/out/j716f/ipados-17.7.11-21H461/j716f/tree')
-    if cand.exists():
-        tree = cand
-
 if len(sys.argv) > 1:
     module = Path(sys.argv[1]).resolve()
 elif len(tree.parents) >= 5 and (tree.parents[4] / 'drivers/QcaBluetooth').exists():
@@ -20,7 +15,7 @@ elif len(tree.parents) >= 5 and (tree.parents[4] / 'drivers/QcaBluetooth').exist
 elif (tree / 'drivers/QcaBluetooth').exists():
     module = (tree / 'drivers/QcaBluetooth').resolve()
 else:
-    module = Path('/home/test/tb-j716f-unixnu/sources/UniXNU/drivers/QcaBluetooth').resolve()
+    raise SystemExit('QcaBluetooth module directory not found; pass it as the first argument')
 
 out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else (tree / 'build/native-legacy-display/qca-bluetooth').resolve()
 out.mkdir(parents=True, exist_ok=True)

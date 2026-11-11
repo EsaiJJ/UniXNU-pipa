@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SM8250 host adapter for Lenovo TB-J716F.
+// SM8250 host adapter for the Xiaomi Pad 6 (pipa).
 static bool hostBringUp (const char **why)
 {
   if (gHost.poisoned) { *why = "transport quarantined"; return false; }
@@ -69,7 +69,7 @@ static bool hostBringUp (const char **why)
   gHost.smmu = mapPhys (0x15000000ULL, 0xd0000, gHost.smmuMap);
   if (!gHost.smmu) { *why = "SMMU mapping"; return false; }
   auto read = [&] (unsigned at) { return read32 (gHost.smmu, at); };
-  J716fSmmuPlan plan = planJ716fSmmu (gHost.phys, gHost.dmaBytes, read);
+  PipaSmmuPlan plan = planPipaSmmu (gHost.phys, gHost.dmaBytes, read);
   if (plan.error) { *why = "SMMU plan refused"; return false; }
 
   // 5. Stop old firmware queue
@@ -80,8 +80,8 @@ static bool hostBringUp (const char **why)
   }
 
   // 6. Apply SMMU takeover for both 0x0e0 and 0x4e0
-  plan = planJ716fSmmu (gHost.phys, gHost.dmaBytes, read);
-  plan.error = configureJ716fSmmu (plan, read,
+  plan = planPipaSmmu (gHost.phys, gHost.dmaBytes, read);
+  plan.error = configurePipaSmmu (plan, read,
     [&] (unsigned at, uint32_t val) {
       write32 (gHost.smmu, at, val);
       __asm__ volatile ("dsb sy" ::: "memory");

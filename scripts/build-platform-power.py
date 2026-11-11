@@ -10,7 +10,7 @@ ROOT = Path('.').resolve()
 OUT = ROOT / 'build/sheng-platform-power'
 OUT.mkdir(parents=True, exist_ok=True)
 
-for p in [ROOT / 'kits/XnuPrelink', Path('/home/test/tb-j716f-unixnu/sources/UniXNU/kits/XnuPrelink')]:
+for p in [ROOT / 'kits/XnuPrelink']:
     if p.exists():
         sys.path.insert(0, str(p))
         break
@@ -63,7 +63,7 @@ if not reference.is_file():
 
 original = ROOT / '.cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed'
 if not original.exists():
-    cached = [path for path in (list(ROOT.parents[1].glob('ipsw/*/kernelcache.decompressed')) + list(Path('/home/test/tb-j716f-unixnu/sources/UniXNU/out/ipsw').glob('*/kernelcache.decompressed')))
+    cached = [path for path in list(ROOT.parents[1].glob('ipsw/*/kernelcache.decompressed'))
               if hashlib.sha256(path.read_bytes()).hexdigest() == ORIGINAL_KERNELCACHE_SHA256]
     require(cached, 'The original kernelcache is not in the IPSW cache; run "unixnu ipsw fetch"')
     original.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +90,7 @@ header += '};\nstatic_assert(sizeof(ApplePMGR)==0x4b8a8,"Original provider stora
 (OUT / 'OriginalPMGRABI.h').write_text(header)
 (OUT / 'GuardedPMGRSlots.inc').write_text(guards)
 
-sources = [p for p in [ROOT / 'kits/j716f/ShengPlatformPower.cpp', ROOT / 'package/ShengPlatformPower.cpp', Path('/home/test/tb-j716f-unixnu/sources/UniXNU-j716f/package/ShengPlatformPower.cpp')] if p.exists()]
+sources = [p for p in [ROOT / 'kits/pipa/ShengPlatformPower.cpp', ROOT / 'package/ShengPlatformPower.cpp'] if p.exists()]
 require(len(sources) >= 1, 'Expected ShengPlatformPower.cpp')
 source = sources[0]
 obj = OUT / 'ShengPlatformPower.o'

@@ -61,7 +61,7 @@
 // The gauge's full-scale SOC and the pack's design capacity (Android's /sys/class/power_supply/bms:
 // CHARGE_FULL_DESIGN = 8840000 uAh, battery type M82_sunwoda_8840mah).
 #define BAT_SOC_FULL 255u
-#define BAT_DESIGN_MAH 8600u
+#define BAT_DESIGN_MAH 8840u
 // IOPMPowerSource TimeRemaining is in minutes; 0xFFFF means unknown.
 #define BAT_TIME_UNKNOWN 0xFFFFu
 

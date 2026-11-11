@@ -1,16 +1,16 @@
-name: J716F XNU source build
+name: Pipa XNU source checks
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, pipa]
   pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: j716f-xnu-source-${{ github.ref }}
+  group: pipa-xnu-source-${{ github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -38,38 +38,80 @@ jobs:
       - name: Validate board configuration, DTB compilation, and proprietary firmware manifest
         run: |
           set -euo pipefail
-          dtc -I dts -O dtb -i socs/sm8250/dts dts/j716f.dts -o /tmp/j716f-hardware.dtb
-          test -s /tmp/j716f-hardware.dtb
-          python3 scripts/check-j716f.py
+          dtc -I dts -O dtb -i socs/sm8250/dts dts/pipa.dts -o /tmp/pipa-hardware.dtb
+          test -s /tmp/pipa-hardware.dtb
+          python3 scripts/check-pipa.py
           python3 - <<'PY'
           import re
           import tomllib
           from pathlib import Path
           board = tomllib.loads(Path('board.toml').read_text())
-          assert board['board']['name'] == 'j716f'
+          assert board['board']['name'] == 'pipa'
           assert board['board']['soc'] == 'SM8250'
-          assert 'j716f-touch=1' in board['payload']['kernel_args']
-          assert 'j716f-usb=1' in board['payload']['kernel_args']
-          assert 'pipa-gpu=12' in board['payload']['kernel_args']
-          assert 'sheng-gpu-addon=1' in board['payload']['kernel_args']
-          assert 'sheng-fb-gpu=1' in board['payload']['kernel_args']
-          assert 'sheng-tum=s' in board['payload']['kernel_args']
+          assert board['board']['kit'] == 'pipa'
+          args = board['payload']['kernel_args']
+          for wanted in ('pipa-touch=5', 'pipa-buttons=1', 'pipa-gpu=12',
+                         'sheng-gpu-addon=1', 'sheng-fb-gpu=1', 'native-ufs-root=1'):
+              assert wanted in args, wanted
+          for absent in ('j716f-touch=1', 'j716f-usb=1', 'sheng-tum=s',
+                         'sheng-backlight=1', 'sheng-wifi=4', 'sheng-bluetooth=1'):
+              assert absent not in args, absent
+          assert board['package']['defconfig']['ipados-17.7.11-21H461'] == 'pipa_defconfig'
+          assert Path('configs/pipa_defconfig').is_file()
+          assert board['device_tree']['source'] == 'device:dts/pipa.dts'
+          assert board['bootimg']['dtb'] == 'build/pipa/pipa.dtb'
           lines = [
               ln.strip() for ln in Path('proprietary-files.txt').read_text().splitlines()
               if ln.strip() and not ln.strip().startswith('#')
           ]
           assert len(lines) >= 10
+          measured = 0
           for ln in lines:
               parts = [p.strip() for p in ln.split('|')]
-              assert len(parts) == 4 and re.fullmatch(r'[0-9a-f]{64}', parts[2]), f'Bad entry: {ln}'
-          print(f'Verified board.toml, hardware.dtb, and {len(lines)} proprietary firmware SHA-256 entries')
+              assert len(parts) == 4, f'Bad entry: {ln}'
+              if parts[2] == 'UNMEASURED':
+                  continue
+              assert re.fullmatch(r'[0-9a-f]{64}', parts[2]), f'Bad digest: {ln}'
+              measured += 1
+          assert measured >= 7, f'only {measured} measured firmware digests'
+          print(f'Verified board.toml, pipa-hardware.dtb, and {len(lines)} firmware entries ({measured} measured)')
           PY
 
-      - name: Compile and run J716F driver checks (GCC and Clang -Werror)
+      - name: Compile and run Pipa board helper tests (GCC and Clang -Werror)
+        run: |
+          set -euo pipefail
+          for cc in gcc clang; do
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror package/ButtonsTests.c -o /tmp/pipa-buttons-"$cc"
+            /tmp/pipa-buttons-"$cc"
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror -I package package/GpuPowerBoardTests.c -o /tmp/pipa-gpu-power-"$cc"
+            /tmp/pipa-gpu-power-"$cc"
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror -I package package/NativeBatteryTests.c -o /tmp/pipa-battery-"$cc"
+            /tmp/pipa-battery-"$cc"
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror -I package package/TouchBoardTests.c -o /tmp/pipa-touch-board-"$cc"
+            /tmp/pipa-touch-board-"$cc"
+          done
+
+      - name: Compile and run Pipa driver checks (GCC and Clang -Werror)
         run: |
           set -euo pipefail
           for cc in gcc clang; do
             "$cc" -std=c11 -O2 -Wall -Wextra -Werror -I drivers/GopFramebuffer drivers/GopFramebuffer/Test/request-state.c -o /tmp/gop-test-"$cc"
             /tmp/gop-test-"$cc"
             "$cc" -std=c11 -O2 -Wall -Wextra -Werror -c package/QcomRpmh.c -o /tmp/qcom-rpmh-"$cc".o
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror \
+              drivers/QcomGeniSpi/Test/geni-spi.c drivers/QcomGeniSpi/GeniSpi.c -o /tmp/geni-spi-"$cc"
+            /tmp/geni-spi-"$cc"
+          done
+          # The upstream Novatek tests use compact one-line conditional blocks, so GCC's -Wmisleading-indentation is silenced
+          # for them; the driver sources are compiled with the same warning set as the archive build otherwise.
+          for cc in gcc clang; do
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror -Wno-misleading-indentation \
+              drivers/ShengNovatekTouch/Test/nvt-protocol.c drivers/ShengNovatekTouch/NvtProtocol.c -o /tmp/nvt-protocol-"$cc"
+            /tmp/nvt-protocol-"$cc"
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror -Wno-misleading-indentation \
+              drivers/ShengNovatekTouch/Test/nvt-points.c drivers/ShengNovatekTouch/NvtProtocol.c -o /tmp/nvt-points-"$cc"
+            /tmp/nvt-points-"$cc"
+            "$cc" -std=c11 -O2 -Wall -Wextra -Werror -Wno-misleading-indentation \
+              drivers/ShengNovatekTouch/Test/touch-core.c drivers/ShengNovatekTouch/NvtTouchCore.c -lm -o /tmp/touch-core-"$cc"
+            /tmp/touch-core-"$cc"
           done

@@ -18,7 +18,7 @@ static const char policy_watchdogd[]="<key>com.apple.watchdogd</key><true/>";
 static const char policy_tail[]="</dict></plist>\n";
 
 // sheng-lite=1: jobs that only reach for network/iCloud/radio/camera/analysis and have nothing to do during bring-up,
-// or enter synchronous XPC wait cycles / KeepAlive crash loops (synced from UniXNU-sheng + J716F hardware profile).
+// or enter synchronous XPC wait cycles / KeepAlive crash loops (synced from UniXNU-sheng + the pipa hardware profile).
 static const char lite_jobs[]=
  "com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,"
  "com.apple.photoanalysisd,com.apple.mediaanalysisd,com.apple.mediastream.mstreamd,com.apple.icloud.searchpartyd,"
@@ -129,7 +129,7 @@ static void sheng_boot_seed_preferences(proc_t p, uint64_t scratch) {
   int r = seed_write_plist(p, scratch, files[i].path, files[i].data, files[i].len, files[i].uid, files[i].gid);
   if (r > 0) ++count;
  }
- printf("j716f bring-up data prefs: %d written\n", count);
+ printf("pipa bring-up data prefs: %d written\n", count);
 }
 
 static int sheng_boot_setup_reset(proc_t p,uint64_t scratch) {

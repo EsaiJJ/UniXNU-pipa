@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Hardware bring-up and DWC3 gadget state machine for TB-J716F (SM8250).
-// Verified against OEM UsbConfigDxe.efi, UsbfnDwc3Dxe.efi, ClockDxe.efi, and j716f.dtb.
+// Hardware bring-up and DWC3 gadget state machine for Xiaomi Pad 6 (SM8250).
+// Verified against OEM UsbConfigDxe.efi, UsbfnDwc3Dxe.efi, ClockDxe.efi, and pipa.dtb.
 // Included by UsbDebugCdc.cpp inside its anonymous namespace.
 
-#ifndef J716F_USB_DEBUG_HW_H
-#define J716F_USB_DEBUG_HW_H
+#ifndef PIPA_USB_DEBUG_HW_H
+#define PIPA_USB_DEBUG_HW_H
 
 // 64 KiB physically contiguous Normal-Cacheable DMA layout (explicit ARM64 cache maintenance):
 //   0x0000..0x0FFF  Event ring (4 KiB, DWC3 write-only after init)
@@ -132,7 +132,7 @@ static void smmuIoWr(void *ctx, unsigned off, uint32_t val) {
 
 static int rpmhSendActive(volatile uint32_t *rsc, const uint32_t *addrs, const uint32_t *vals, unsigned count) {
     const QcomRscLayout layout = qcom_rsc_layout(rsc[0]);
-    volatile uint8_t *tcsVa = reinterpret_cast<volatile uint8_t *>(rsc) + J716F_RSC_TCS_OFFSET;
+    volatile uint8_t *tcsVa = reinterpret_cast<volatile uint8_t *>(rsc) + PIPA_RSC_TCS_OFFSET;
     QcomRpmhWrite writes[16], fin[8];
 
     // Ensure DRV_IRQ_ENABLE (offset 0x00) enables TCS 0 & 1 completion status and clear stale state
@@ -170,17 +170,17 @@ static int rpmhSendActive(volatile uint32_t *rsc, const uint32_t *addrs, const u
 static void usbVoteRpmhRailsOnce() {
     OSSharedPtr<IOMemoryMap> cmdDbMap, rscMap;
     const uint8_t *db = reinterpret_cast<const uint8_t *>(
-        mapRangeUncached(J716F_CMD_DB_BASE, J716F_CMD_DB_SIZE, cmdDbMap));
+        mapRangeUncached(PIPA_CMD_DB_BASE, PIPA_CMD_DB_SIZE, cmdDbMap));
     volatile uint32_t *rsc = reinterpret_cast<volatile uint32_t *>(
-        mapRangeUncached(J716F_RSC_DRV_BASE, J716F_RSC_DRV_SIZE, rscMap));
+        mapRangeUncached(PIPA_RSC_DRV_BASE, PIPA_RSC_DRV_SIZE, rscMap));
     if (!db || !rsc) return;
 
     QcomRpmhResource res{};
-    if (qcom_cmd_db_find(db, J716F_CMD_DB_SIZE, "xo.lvl", &res) == QcomRpmhOk && res.address) {
+    if (qcom_cmd_db_find(db, PIPA_CMD_DB_SIZE, "xo.lvl", &res) == QcomRpmhOk && res.address) {
         uint32_t a = res.address, v = 0x3u;
         (void)rpmhSendActive(rsc, &a, &v, 1);
     }
-    if (qcom_cmd_db_find(db, J716F_CMD_DB_SIZE, "cx.lvl", &res) == QcomRpmhOk && res.address) {
+    if (qcom_cmd_db_find(db, PIPA_CMD_DB_SIZE, "cx.lvl", &res) == QcomRpmhOk && res.address) {
         uint32_t idx = 0;
         if (qcom_rpmh_level_index(&res, 192u, &idx) == QcomRpmhOk) {
             uint32_t a = res.address;
@@ -188,7 +188,7 @@ static void usbVoteRpmhRailsOnce() {
         }
     }
     struct LdoSpec { const char *name; uint32_t mv; };
-    // Verified against ZUI 15.0.485 / j716f.dtb hsphy@88e3000 (l5/l12/l2) + ssphy@88e8000 (l9/l18)
+    // Verified against ZUI 15.0.485 / pipa.dtb hsphy@88e3000 (l5/l12/l2) + ssphy@88e8000 (l9/l18)
     static const LdoSpec kLdos[5] = {
         {"ldoa5",  880u},
         {"ldoa12", 1800u},
@@ -197,7 +197,7 @@ static void usbVoteRpmhRailsOnce() {
         {"ldoa18", 920u},
     };
     for (unsigned i = 0; i < 5; ++i) {
-        if (qcom_cmd_db_find(db, J716F_CMD_DB_SIZE, kLdos[i].name, &res) == QcomRpmhOk && res.address) {
+        if (qcom_cmd_db_find(db, PIPA_CMD_DB_SIZE, kLdos[i].name, &res) == QcomRpmhOk && res.address) {
             // Set MODE=NPM(7), VOLTAGE=mv, ENABLE=1
             uint32_t addrs[3] = {res.address + 0x8u, res.address + 0x0u, res.address + 0x4u};
             uint32_t vals[3]  = {7u, kLdos[i].mv, 1u};
@@ -211,7 +211,7 @@ static void usbVoteRpmhRailsOnce() {
     if (outErr) *outErr = nullptr;
     if (!hw.smmu) {
         hw.smmu = reinterpret_cast<volatile uint32_t *>(
-            mapRangeUncached(J716F_APPS_SMMU_BASE, J716F_APPS_SMMU_SIZE, hw.smmuMap));
+            mapRangeUncached(PIPA_APPS_SMMU_BASE, PIPA_APPS_SMMU_SIZE, hw.smmuMap));
     }
     if (!hw.smmu) {
         hw.smmuOrigSmr  = 0xDEAD0001u;
@@ -264,7 +264,7 @@ static void usbVoteRpmhRailsOnce() {
         }
         if (hitsProtected) continue;
 
-        if (((smr ^ J716F_USB0_SMMU_SID_0) & 0x7FFFu & ~mask) == 0u) {
+        if (((smr ^ PIPA_USB0_SMMU_SID_0) & 0x7FFFu & ~mask) == 0u) {
             foundUsb0Smr    = true;
             hw.smmuOrigSmr  = smr;
             hw.smmuOrigS2cr = s2cr;
@@ -286,9 +286,9 @@ static void usbVoteRpmhRailsOnce() {
     }
 
     if (!foundUsb0Smr) {
-        const smmu_plan plan = smmu_plan_bypass(&io, J716F_USB0_SMMU_SID_0, hw.dmaPhys, DMA_TOTAL_BYTES);
+        const smmu_plan plan = smmu_plan_bypass(&io, PIPA_USB0_SMMU_SID_0, hw.dmaPhys, DMA_TOTAL_BYTES);
         if (!plan.error) {
-            const char *cfgErr = smmu_configure_bypass(&io, &plan, J716F_USB0_SMMU_SID_0);
+            const char *cfgErr = smmu_configure_bypass(&io, &plan, PIPA_USB0_SMMU_SID_0);
             hw.smmuOrigSmr  = smmuIoRd(io.ctx, 0x800u + 4u * plan.slot);
             hw.smmuOrigS2cr = smmuIoRd(io.ctx, 0xC00u + 4u * plan.slot);
             if (cfgErr && (hw.smmuOrigSmr & 0x80000000u) == 0u && !plan.reuse) {
@@ -402,15 +402,15 @@ static void usbInitFemtoHsPhy(UsbHw &hw) {
 static bool usbGccAndPhyInit(UsbHw &hw) {
     if (!hw.gcc) {
         hw.gcc = reinterpret_cast<volatile uint32_t *>(
-            mapRangeUncached(J716F_GCC_BASE, J716F_GCC_SIZE, hw.gccMap));
+            mapRangeUncached(PIPA_GCC_BASE, PIPA_GCC_SIZE, hw.gccMap));
     }
     if (!hw.phy) {
         hw.phy = reinterpret_cast<volatile uint32_t *>(
-            mapRangeUncached(J716F_HSPHY_BASE, J716F_HSPHY_SIZE, hw.phyMap));
+            mapRangeUncached(PIPA_HSPHY_BASE, PIPA_HSPHY_SIZE, hw.phyMap));
     }
     if (!hw.eud) {
         hw.eud = reinterpret_cast<volatile uint32_t *>(
-            mapRangeUncached(J716F_EUD_BASE, J716F_EUD_SIZE, hw.eudMap));
+            mapRangeUncached(PIPA_EUD_BASE, PIPA_EUD_SIZE, hw.eudMap));
     }
     if (!hw.gcc || !hw.phy) return false;
 
@@ -461,4 +461,4 @@ static bool usbGccAndPhyInit(UsbHw &hw) {
     return true;
 }
 
-#endif // J716F_USB_DEBUG_HW_H
+#endif // PIPA_USB_DEBUG_HW_H

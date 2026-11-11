@@ -188,7 +188,7 @@ void sheng_bt_firmware_release(uint8_t *data, size_t size) {
     if (data && size) IOFreeData(data, size);
 }
 
-/* Route qbt_linux.c's qca_uart_setup call to QCA_QCA6390 (enum value 8 in btqca.h) on TB-J716F. */
+/* Route qbt_linux.c's qca_uart_setup call to QCA_QCA6390 (enum value 8 in btqca.h) on the Xiaomi Pad 6. */
 struct hci_dev;
 struct qca_btsoc_version {
     uint32_t product_id;

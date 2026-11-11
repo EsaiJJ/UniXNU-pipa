@@ -25,7 +25,7 @@ typedef unsigned int u32;
 typedef unsigned char u8;
 
 #define ZONE_BASE  0xB0000000UL
-#define ZONE_SIZE  0x80000UL                  // 512 KiB matching uefi-j716f Boot Log region at 0xB0000000
+#define ZONE_SIZE  0x80000UL                  // 512 KiB of uefi-pipa's boot-log region at 0xB0000000 (stock reserves 4 MiB)
 #define ZONE_SIG   0x43474244U                 // "DBGC"
 #define ZONE_HEAD  12UL
 #define ZONE_DATA  (ZONE_SIZE - ZONE_HEAD)
@@ -671,7 +671,7 @@ static u64 smc3(u64 function, u64 a1, u64 a2, u64 a3) {
 }
 
 // RamoopsLogLib's RestartIntoFastboot after its PON part (prepare_warm_fastboot, done at boot_progress_start). Interrupts are
-// masked; it does not return. On Lenovo TB-J716F, IMEM 0x146BF65C is TZ XPU-protected and SCM_HALT_PMIC_ARB hangs;
+// masked; it does not return. On the Xiaomi Pad 6, IMEM 0x146BF65C is TZ XPU-protected and SCM_HALT_PMIC_ARB hangs;
 // PSCI_SYSTEM_RESET (0x84000009) performs a direct warm reset into Fastboot using PON_SOFT_RB_SPARE (0x8F = 0x04).
 __attribute__((noreturn)) static void restart_into_fastboot(void) {
   __asm__ volatile("msr daifset, #3" ::: "memory");
@@ -1453,7 +1453,7 @@ extern volatile u32 native_buttons_mask __attribute__((weak_import));
 #define SAVE_PASSES 30u   // 3 s
 
 
-// --- J716F BOTTOM HUD (3-row compact diagnostic overlay) ---
+// --- PIPA BOTTOM HUD (3-row compact diagnostic overlay) ---
 static char hud_last_stage[80];
 static char hud_ui_exit[64];
 static char hud_last_sig9[44];

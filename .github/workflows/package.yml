@@ -32,8 +32,9 @@ jobs:
           submodules: recursive
       - uses: actions/checkout@v4
         with:
-          repository: Denis0x00/uefi-j716f
-          path: uefi-j716f
+          repository: xVanTuring/uefi-pipa
+          ref: pipa
+          path: uefi-pipa
           submodules: recursive
       - name: tools
         run: |
@@ -60,7 +61,7 @@ jobs:
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-j716f
+        run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-pipa
       - name: images
         uses: actions/upload-artifact@v4
         with:
@@ -68,7 +69,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            UniXNU/out/j716f/*/*/boot/boot.img
-            UniXNU/out/j716f/*/*/payload/payload.img
-            UniXNU/out/j716f/*/*/kernel/kernel.macho
-            UniXNU/out/j716f/*/*/package.manifest.json
+            UniXNU/out/pipa/*/*/boot/boot.img
+            UniXNU/out/pipa/*/*/payload/payload.img
+            UniXNU/out/pipa/*/*/kernel/kernel.macho
+            UniXNU/out/pipa/*/*/package.manifest.json

@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Native Goodix GT7386 (goodix,gt738x) GENI I2C touchscreen driver for Lenovo TB-J716F (SM8250).
-// Supports both GENI FIFO mode and SE-DMA mode (with SMMU SID 0x43 pass-through).
+// Default-off staged bring-up of pipa's touch controller (Novatek NT36532 on QUP wrapper 0 SE4 SPI), after UniXNU-sheng's
+// TouchProbe.cpp (NT36532E on SM8550; its THP frames are replaced by the point reports pipa's firmware sends). `pipa-touch=<n>`:
+//   1  read-only snapshot of the GCC branches, the S4 DFS levels and the touch pins
+//   2  vote the QUP clocks, wait for them, configure the pins, read the GENI engine identity
+//   3  GENI SPI init (FIFO mode, or SE DMA through an SMMU pass-through if the FIFO is disabled) and clock, an engine loopback test,
+//      then reset the touch bootloader and read the chip id (drivers/ShengNovatekTouch nvt_identify)
+//   4  host-download the firmware (the tablet's novatek_nt36532_m82_fw_tm.bin, built in by build-gop-legacy-display.py), wait
+//      for the reset state and read the firmware info (the coordinate range)
+//   5  read point reports when the attention line (GPIO39, rising edge, latched by the TLMM without an interrupt) fires, and
+//      publish the fingers to NativeHidInput (TouchState.cpp)
+// Bits 8 and up of the value are a count of scripted strokes (autoTouchThread) for runs nobody watches: 10245 is stage 5 and 40.
+// The rows below go to the kernel log every 10 s (BootRamoops.c); the first failure stops the sequence. Board constants and their
+// sources are in TouchBoard.h, the controller protocol in NvtProtocol.c. Stages 1-5 are the upstream pipa port's sequence; this fork has not run them.
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -10,113 +21,36 @@
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <pexpert/pexpert.h>
-
 extern "C" {
+#include "GeniSpi.h"
+#include "NvtProtocol.h"
 #include "TouchBoard.h"
-#include "QcomRpmh.h"
 #include "SmmuBypass.h"
-
-// Shared touch state consumed by NativeHidInput (TouchState.cpp)
+extern const uint8_t native_touch_firmware[] __attribute__((weak_import));
+extern const uint32_t native_touch_firmware_size __attribute__((weak_import));
+// The finger set (TouchState.cpp) and its consumer's notification.
 extern volatile uint32_t native_touch_seq, native_touch_count, native_touch_hid_reports;
 extern volatile int native_touch_xs[12], native_touch_ys[12], native_touch_ids[12];
 void native_touch_published(void);
+}
 
-// Diagnostic storage defined in LinkStubs.c and read by BootRamoops.c
-extern char native_touch_rows[4][120];
-extern volatile unsigned native_touch_stage;
-extern volatile unsigned native_touch_stage_req;
-extern volatile unsigned native_touch_stroke_count;
-extern volatile int native_touch_strokes[16][7];
-extern char native_touch_trace[8][120];
-extern volatile int native_touch_extent[4];
-
-// Coordination flag with Buttons.c VolUp+VolDown swipe gesture backup
-volatile uint32_t native_touch_injecting = 0;
+extern "C" {
+char native_touch_rows[4][120];
+char native_touch_trace[8][120];
+volatile uint32_t native_touch_loop_step;
+volatile uint32_t native_touch_stage_req, native_touch_stage_done, native_touch_step, native_touch_frames,
+    native_touch_valid, native_touch_contacts;
+volatile int native_touch_error;
+volatile int native_touch_last_x = -1, native_touch_last_y = -1;
+// Finished strokes as published: a ring of {start ms, duration ms, first x, first y, last x, last y, reports} in HID units, and the
+// extent every published contact reached {min x, max x, min y, max y}. For the log (BootRamoops.c) and the axis check.
+volatile int32_t native_touch_strokes[16][7];
+volatile uint32_t native_touch_stroke_count;
+volatile int32_t native_touch_extent[4] = {0x7fffffff, -1, 0x7fffffff, -1};
 }
 
 namespace {
-
-// GENI I2C & SE-DMA register offsets (within 16 KiB SE window)
-constexpr uint32_t kGeniForceDefault  = 0x020u;
-constexpr uint32_t kGeniOutputCtrl    = 0x024u;
-constexpr uint32_t kGeniCgcCtrl       = 0x028u;
-constexpr uint32_t kGeniStatus        = 0x040u;
-constexpr uint32_t kGeniClkCfg        = 0x048u;
-constexpr uint32_t kGeniIfDisable     = 0x064u;
-constexpr uint32_t kGeniFwRevision    = 0x068u;
-constexpr uint32_t kGeniClkSel        = 0x07cu;
-constexpr uint32_t kGeniByteGran      = 0x254u;
-constexpr uint32_t kGeniDmaModeEn     = 0x258u;
-constexpr uint32_t kGeniTxPack0       = 0x260u;
-constexpr uint32_t kGeniTxPack1       = 0x264u;
-constexpr uint32_t kGeniTxLen         = 0x26cu;
-constexpr uint32_t kGeniRxLen         = 0x270u;
-constexpr uint32_t kGeniSclCounters   = 0x278u;
-constexpr uint32_t kGeniRxPack0       = 0x284u;
-constexpr uint32_t kGeniRxPack1       = 0x288u;
-constexpr uint32_t kGeniMCmd0         = 0x600u;
-constexpr uint32_t kGeniMCmdCtrl      = 0x604u;
-constexpr uint32_t kGeniMIrqStatus    = 0x610u;
-constexpr uint32_t kGeniMIrqEn        = 0x614u;
-constexpr uint32_t kGeniMIrqClear     = 0x618u;
-constexpr uint32_t kGeniSIrqClear     = 0x648u;
-constexpr uint32_t kGeniTxFifo        = 0x700u;
-constexpr uint32_t kGeniRxFifo        = 0x780u;
-constexpr uint32_t kGeniRxFifoStatus  = 0x804u;
-constexpr uint32_t kGeniTxWatermark   = 0x80cu;
-constexpr uint32_t kGeniRxWatermark   = 0x810u;
-constexpr uint32_t kGeniRxRfrWatermark= 0x814u;
-constexpr uint32_t kSeDmaTxPtrL       = 0xc30u;
-constexpr uint32_t kSeDmaTxPtrH       = 0xc34u;
-constexpr uint32_t kSeDmaTxAttr       = 0xc38u;
-constexpr uint32_t kSeDmaTxLen        = 0xc3cu;
-constexpr uint32_t kSeDmaTxIrqStat    = 0xc40u;
-constexpr uint32_t kSeDmaTxIrqClr     = 0xc44u;
-constexpr uint32_t kSeDmaTxIrqEnSet   = 0xc4cu;
-constexpr uint32_t kSeDmaTxFsmRst     = 0xc58u;
-constexpr uint32_t kSeDmaRxPtrL       = 0xd30u;
-constexpr uint32_t kSeDmaRxPtrH       = 0xd34u;
-constexpr uint32_t kSeDmaRxAttr       = 0xd38u;
-constexpr uint32_t kSeDmaRxLen        = 0xd3cu;
-constexpr uint32_t kSeDmaRxIrqStat    = 0xd40u;
-constexpr uint32_t kSeDmaRxIrqClr     = 0xd44u;
-constexpr uint32_t kSeDmaRxIrqEnSet   = 0xd4cu;
-constexpr uint32_t kSeDmaRxFsmRst     = 0xd58u;
-constexpr uint32_t kSeGsiEventEn      = 0xe18u;
-constexpr uint32_t kSeIrqEn           = 0xe1cu;
-constexpr uint32_t kSeHwParam0        = 0xe24u;
-constexpr uint32_t kSeDmaGeneralCfg   = 0xe30u;
-
-// GENI M_IRQ & command constants
-constexpr uint32_t kMCmdDone          = (1u << 0);
-constexpr uint32_t kMCmdOverrun       = (1u << 1);
-constexpr uint32_t kMIllegalCmd       = (1u << 2);
-constexpr uint32_t kMCmdFailure       = (1u << 3);
-constexpr uint32_t kMCmdCancelDone    = (1u << 4);
-constexpr uint32_t kMCmdAbortDone     = (1u << 5);
-constexpr uint32_t kMGpIrq            = (0x3fu << 9);  // I2C NACK / bus error / arb lost
-constexpr uint32_t kMRxFifoRdErr      = (1u << 24);
-constexpr uint32_t kMRxFifoWrErr      = (1u << 25);
-constexpr uint32_t kMRxWatermark      = (1u << 26);
-constexpr uint32_t kMRxLast           = (1u << 27);
-constexpr uint32_t kMTxFifoRdErr      = (1u << 28);
-constexpr uint32_t kMTxFifoWrErr      = (1u << 29);
-constexpr uint32_t kMTxWatermark      = (1u << 30);
-constexpr uint32_t kMErrors = kMCmdOverrun | kMIllegalCmd | kMCmdFailure | kMGpIrq |
-                              kMRxFifoRdErr | kMRxFifoWrErr | kMTxFifoRdErr | kMTxFifoWrErr;
-
-constexpr uint32_t kCmdCtrlAbort      = (1u << 1);
-constexpr uint32_t kCmdCtrlCancel     = (1u << 2);
-constexpr uint32_t kI2cOpWrite        = 1u;
-constexpr uint32_t kI2cOpRead         = 2u;
-constexpr uint32_t kI2cStopStretch    = (1u << 2);
-constexpr uint32_t kDmaDone           = (1u << 0);
-constexpr uint32_t kDmaEot            = (1u << 1);
-constexpr uint32_t kDmaAhbErr         = (1u << 2);
-
-constexpr size_t kDmaBufHalf          = 4096;  // 8 KiB total (4 KiB TX + 4 KiB RX)
-
-struct Region { OSSharedPtr<IOMemoryMap> keep; uintptr_t va = 0; };
+struct Region {OSSharedPtr<IOMemoryMap> keep; uintptr_t va = 0;};
 
 bool mapRegion(uint64_t phys, uint64_t length, Region &region) {
     IODeviceMemory *memory = IODeviceMemory::withRange(phys, length);
@@ -126,22 +60,21 @@ bool mapRegion(uint64_t phys, uint64_t length, Region &region) {
     region.va = region.keep ? static_cast<uintptr_t>(region.keep->getVirtualAddress()) : 0;
     return region.va != 0;
 }
-
-inline uint32_t rd32(uintptr_t base, uint32_t reg) {
-    return *reinterpret_cast<volatile uint32_t *>(base + reg);
-}
-
-inline void wr32(uintptr_t base, uint32_t reg, uint32_t value) {
+uint32_t rd32(uintptr_t base, uint32_t reg) {return *reinterpret_cast<volatile uint32_t *>(base + reg);}
+void wr32(uintptr_t base, uint32_t reg, uint32_t value) {
     *reinterpret_cast<volatile uint32_t *>(base + reg) = value;
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
-void cacheRange(void *p, size_t len, int op) { // 0 clean, 1 clean+inval, 2 inval
-    uint64_t ctr = 0;
+// The serial engine's DMA master reads and writes two 64 KiB buffers (only when its FIFO is disabled). The apps SMMU is
+// firmware-managed; the stream gets a pass-through mapping, so the engine addresses physical memory. Caches are maintained
+// explicitly.
+constexpr size_t kDmaBytes = 64 * 1024;
+void cacheRange(void *p, size_t len, int op) {   // 0 clean, 1 clean+invalidate, 2 invalidate
+    uint64_t ctr;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    size_t line = 4u << ((ctr >> 16) & 15u);
-    uintptr_t a = reinterpret_cast<uintptr_t>(p) & ~(line - 1u);
-    uintptr_t end = reinterpret_cast<uintptr_t>(p) + len;
+    size_t line = 4u << ((ctr >> 16) & 15);
+    uintptr_t a = reinterpret_cast<uintptr_t>(p) & ~(line - 1), end = reinterpret_cast<uintptr_t>(p) + len;
     for (; a < end; a += line) {
         if (op == 0) __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
         else if (op == 1) __asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
@@ -149,54 +82,204 @@ void cacheRange(void *p, size_t len, int op) { // 0 clean, 1 clean+inval, 2 inva
     }
     __asm__ volatile("dsb sy" ::: "memory");
 }
-
-uint32_t smmuRd(void *ctx, unsigned o) { return rd32(reinterpret_cast<uintptr_t>(ctx), o); }
-void smmuWr(void *ctx, unsigned o, uint32_t v) { wr32(reinterpret_cast<uintptr_t>(ctx), o, v); }
-
-struct TouchPoint {
-    int id;
-    int x;
-    int y;
-};
-
-struct Session {
-    Region gccLow, gccQup1, gccCore, gccVote, tlmmPins, wrapper, se, smmu, cmdDb, rscDrv;
-    IOBufferMemoryDescriptor *dmaMem = nullptr;
-    uint8_t *dmaTx = nullptr;
-    uint8_t *dmaRx = nullptr;
-    uint64_t dmaTxPhys = 0;
-    uint64_t dmaRxPhys = 0;
-    bool useDma = false;
-    unsigned txFifoDepth = 16;
-    unsigned clkSel = 0;
-    uint8_t slaveAddr = GTX8_ADDR_PRIMARY;
-    unsigned step = 0;
-    int err = 0;
-    int rpmhRc[3] = {0, 0, 0};
-    int smmuSlot = -1, smmuBank = -1, smmuErr = 0;
-    uint32_t qupVer = 0, fwRev = 0, ifDis = 0, hwParam0 = 0, clkCfg = 0, sclCfg = 0;
-    uint32_t voteReg = 0, cbcr[5] = {};
-    uint32_t pinCfg[4] = {};
-    uint8_t verBuf[12] = {};
-    char pidStr[8] = "-";
-    uint32_t lastIrq = 0, lastDmaTx = 0, lastDmaRx = 0;
-    uint32_t polls = 0, readyFrames = 0, validFrames = 0, badCsum = 0, i2cErrors = 0, irqEdges = 0;
-    int lastX = -1, lastY = -1, lastContacts = 0;
-    uint8_t lastRaw[16] = {};
-    int slotRaw[10] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    unsigned flipX = 0, flipY = 0, swapXY = 0;
-};
-
-struct Stroke { int id, x0, y0, x1, y1, frames; uint32_t t0; };
-Stroke gStrokes[10];
-unsigned gStrokeCount = 0;
-
-uint32_t touchMs() {
-    uint64_t f = 0;
-    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
-    return static_cast<uint32_t>(mach_absolute_time() / ((f ? f : 19200000ULL) / 1000ULL));
+void dmaClean(void *, void *p, size_t len) {cacheRange(p, len, 0);}
+void dmaCleanInval(void *, void *p, size_t len) {cacheRange(p, len, 1);}
+void dmaInval(void *, void *p, size_t len) {cacheRange(p, len, 2);}
+uint32_t smmuRd(void *ctx, unsigned o) {return rd32(reinterpret_cast<uintptr_t>(ctx), o);}
+void smmuWr(void *ctx, unsigned o, uint32_t v) {wr32(reinterpret_cast<uintptr_t>(ctx), o, v);}
+int smmuErrorCode(const char *e) {
+    static const char *const names[] = {"SMMU AArch64 stage 1 unsupported", "DMA exceeds SMMU address width", "unsupported SMMU geometry",
+        "conflicting stream mapping", "reserved context bank is not a bypass bank", "no free stream-match group",
+        "SMMU bypass bank readback", "SMMU stream context readback", "SMMU stream mapping readback"};
+    for (unsigned i = 0; i < sizeof names / sizeof *names; ++i) if (strcmp(e, names[i]) == 0) return static_cast<int>(i) + 1;
+    return 99;
 }
 
+uint32_t ioRd(void *ctx, uint32_t reg) {return rd32(reinterpret_cast<uintptr_t>(ctx), reg);}
+void ioWr(void *ctx, uint32_t reg, uint32_t value) {wr32(reinterpret_cast<uintptr_t>(ctx), reg, value);}
+void ioDelayUs(void *, unsigned us) {IODelay(us);}
+
+struct Session {
+    Region gccLow, gccQup, gccCore, gccVote, tlmmIrq, tlmmSpi, wrapper, se, smmu;
+    IOBufferMemoryDescriptor *dmaMem;
+    uint64_t dmaPhys;
+    int smmuSlot, smmuBank, smmuErr;
+    // First transfers as seen on the wire, and the identification result per SPI mode tried.
+    unsigned traceN;
+    uint32_t traceLen[8];
+    uint8_t traceTx[8][8], traceRx[8][10];
+    unsigned modeTried, modeUsed;
+    // Last six transfers (ring) and the firmware being downloaded, for failures after identification.
+    unsigned ringN;
+    uint32_t ringLen[6];
+    uint8_t ringTx[6][8], ringRx[6][8];
+    unsigned fwParts, fwCasc, fwIlm, fwDlm, fwSize;
+    // Report loop evidence: latched edges, reads, checksum failures, recovery patterns, reads without an edge, the last report.
+    uint32_t edges, reads, bad, recov, idleReads, irqCfg;
+    uint8_t last[24];
+    int loopRc = 99;                  // engine loopback self-test (99 = not run)
+    uint8_t loopRx[16];
+    int modeRc[4];
+    uint8_t modeId[4][6];
+    struct geni_spi spi;
+    uint8_t *tx = nullptr, *rx = nullptr;
+    struct nvt_chip chip;
+    struct nvt_bus bus;
+    struct nvt_fw_info info;
+    uint32_t vals[32];
+    int lastRc = 0;
+    uint32_t lastLen = 0, xIrq = 0, xGeni = 0, xTx = 0, xRx = 0;
+    uint64_t levelHz[TB_DFS_LEVELS];
+    unsigned level = 0, div = 0;
+    uint64_t actualHz = 0;
+};
+
+int busXfer(void *ctx, const uint8_t *tx, uint8_t *rx, size_t len) {
+    Session *s = static_cast<Session *>(ctx);
+    int rc = geni_spi_transfer(&s->spi, tx, rx, len, 0);
+    {
+        unsigned i = s->ringN++ % 6;
+        s->ringLen[i] = static_cast<uint32_t>(len);
+        for (unsigned k = 0; k < 8; ++k) {
+            s->ringTx[i][k] = (tx && k < len) ? tx[k] : 0;
+            s->ringRx[i][k] = (rx && k < len && !rc) ? rx[k] : 0;
+        }
+    }
+    if (!rc && s->traceN < 8) {
+        unsigned i = s->traceN++;
+        s->traceLen[i] = static_cast<uint32_t>(len);
+        for (unsigned k = 0; k < 8 && k < len && tx; ++k) s->traceTx[i][k] = tx[k];
+        for (unsigned k = 0; k < 10 && k < len && rx; ++k) s->traceRx[i][k] = rx[k];
+    }
+    if (rc && !s->lastRc) {   // keep the engine state of the first failure
+        s->lastRc = rc;
+        s->lastLen = static_cast<uint32_t>(len);
+        s->xIrq = s->spi.snap_irq;
+        s->xGeni = s->spi.snap_status;
+        s->xTx = s->spi.snap_txfs;
+        s->xRx = s->spi.snap_rxfs;
+    }
+    return rc;
+}
+void busDelay(void *, unsigned ms) {IOSleep(ms);}
+
+void fail(unsigned step, int code) {native_touch_step = step; native_touch_error = code;}
+void rows(const Session &s);
+void mark(const Session &s, unsigned step) {native_touch_step = step; rows(s);}
+
+// snprintf returns the length it would have written, so a running offset must be clamped before the next append.
+struct Out {
+    char *p; size_t cap, n;
+    void add(const char *fmt, unsigned a = 0, unsigned b = 0) {
+        if (n + 1 >= cap) return;
+        int w = snprintf(p + n, cap - n, fmt, a, b);
+        if (w < 0) return;
+        n = (n + static_cast<size_t>(w) >= cap) ? cap - 1 : n + static_cast<size_t>(w);
+    }
+    void hex(uint8_t v) {add("%02x", v);}
+};
+
+void traceRows(const Session &s) {
+    for (unsigned r = 0; r < 2; ++r) {
+        Out o = {native_touch_trace[r], sizeof native_touch_trace[r], 0};
+        o.p[0] = 0;
+        o.add("TCH xfer");
+        for (unsigned j = 0; j < 2; ++j) {
+            unsigned i = r * 2 + j;
+            if (i >= s.traceN) break;
+            o.add(" #%u len%u tx", i, s.traceLen[i]);
+            for (unsigned k = 0; k < 8 && k < s.traceLen[i]; ++k) o.hex(s.traceTx[i][k]);
+            o.add(" rx");
+            for (unsigned k = 0; k < 10 && k < s.traceLen[i]; ++k) o.hex(s.traceRx[i][k]);
+            o.add(" |");
+        }
+    }
+    const struct nvt_chip &c = s.chip;
+    Out v = {native_touch_trace[2], sizeof native_touch_trace[2], 0};
+    v.p[0] = 0;
+    v.add("TCH crc flags%02x", c.crc_flags);
+    v.add(" ilm %08x/", c.crc_golden[0]);
+    v.add("%08x dlm ", c.crc_result[0]);
+    v.add("%08x/", c.crc_golden[1]);
+    v.add("%08x sram ilm bad%u", c.crc_result[1], c.sram_bad[0]);
+    v.add(" dlm bad%u", c.sram_bad[1]);
+    Out f = {native_touch_trace[3], sizeof native_touch_trace[3], 0};
+    f.p[0] = 0;
+    f.add("TCH reports lp%u", native_touch_loop_step);
+    f.add(" edges%u", s.edges);
+    f.add(" reads%u", s.reads);
+    f.add(" bad%u", s.bad);
+    f.add(" recov%u", s.recov);
+    f.add(" idle%u cfg%08x last", s.idleReads, s.irqCfg);
+    for (unsigned k = 0; k < 24; ++k) f.hex(s.last[k]);
+    Out d = {native_touch_trace[4], sizeof native_touch_trace[4], 0};
+    d.p[0] = 0;
+    d.add("TCH dl try%u", c.dl_attempt);
+    d.add(" stage%u", c.dl_stage);
+    d.add(" rc%d", static_cast<unsigned>(c.dl_rc));
+    d.add(" wait%02x", c.dl_wait_value);
+    d.add(" polls%u rst", c.dl_polls);
+    for (unsigned k = 0; k < 5; ++k) d.hex(c.dl_reset_state[k]);
+    d.add(" fw parts%u", s.fwParts);
+    d.add(" casc%u", s.fwCasc);
+    d.add(" ilm%u", s.fwIlm);
+    d.add(" dlm%u", s.fwDlm);
+    for (unsigned r = 0; r < 2; ++r) {
+        Out o = {native_touch_trace[5 + r], sizeof native_touch_trace[5 + r], 0};
+        o.p[0] = 0;
+        o.add("TCH last");
+        for (unsigned j = 0; j < 2; ++j) {
+            unsigned k = r * 2 + j;                       // last four, oldest first
+            if (s.ringN < 4 && k >= s.ringN) break;
+            unsigned seq = s.ringN >= 4 ? s.ringN - 4 + k : k;
+            unsigned i = seq % 6;
+            o.add(" #%u len%u tx", seq, s.ringLen[i]);
+            for (unsigned q = 0; q < 8 && q < s.ringLen[i]; ++q) o.hex(s.ringTx[i][q]);
+            o.add(" rx");
+            for (unsigned q = 0; q < 8 && q < s.ringLen[i]; ++q) o.hex(s.ringRx[i][q]);
+            o.add(" |");
+        }
+    }
+    Out m = {native_touch_trace[7], sizeof native_touch_trace[7], 0};
+    m.p[0] = 0;
+    m.add("TCH modes tried%u used%u", s.modeTried, s.modeUsed);
+    for (unsigned i = 0; i < s.modeTried && i < 4; ++i) {
+        m.add(" | rc%d id", static_cast<unsigned>(s.modeRc[i]));
+        for (unsigned k = 0; k < 6; ++k) m.hex(s.modeId[i][k]);
+    }
+    m.add(" | loop rc%d rx", static_cast<unsigned>(s.loopRc));
+    for (unsigned k = 0; k < 8; ++k) m.hex(s.loopRx[k]);
+}
+
+void rows(const Session &s) {
+    traceRows(s);
+    const uint32_t *v = s.vals;
+    snprintf(native_touch_rows[0], sizeof native_touch_rows[0],
+        "TCH s%u/%u st%u e%d vote%08x h%08x %08x %08x %08x %08x gp%08x dfs%08x",
+        native_touch_stage_done, native_touch_stage_req, native_touch_step, native_touch_error,
+        v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+    snprintf(native_touch_rows[1], sizeof native_touch_rows[1],
+        "TCH p%08x %08x %08x %08x irq%08x wr%08x fw%08x if%08x hw%08x L%u/%u %uHz",
+        v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17], s.level, s.div, (unsigned)s.actualHz);
+    snprintf(native_touch_rows[2], sizeof native_touch_rows[2],
+        "TCH id%02x%02x%02x%02x%02x%02x %.15s v%02x p%04x %ux%u max%ux%u rp%u ok%u c%u %d,%d hid%u",
+        s.chip.id[0], s.chip.id[1], s.chip.id[2], s.chip.id[3], s.chip.id[4], s.chip.id[5],
+        s.chip.map ? s.chip.map->name : "-", s.info.fw_ver, s.info.pid, s.info.x_num, s.info.y_num, s.info.abs_x_max,
+        s.info.abs_y_max, native_touch_frames, native_touch_valid, native_touch_contacts, native_touch_last_x, native_touch_last_y,
+        native_touch_hid_reports);
+    snprintf(native_touch_rows[3], sizeof native_touch_rows[3],
+        "TCH xf rc%d n%u ev%08x gs%08x tx%08x rx%08x dma t%x r%x ti%x ri%x sm%d/%d/e%d pa%llx",
+        s.lastRc, s.lastLen, s.xIrq, s.xGeni, s.xTx, s.xRx, s.spi.snap_dma_tx, s.spi.snap_dma_rx, s.spi.snap_dma_txin,
+        s.spi.snap_dma_rxin, s.smmuSlot, s.smmuBank, s.smmuErr, (unsigned long long)s.dmaPhys);
+}
+
+struct Stroke {int id, x0, y0, x1, y1, frames; uint32_t t0;};
+Stroke strokes[NVT_POINT_SLOTS];
+unsigned strokeCount;
+uint32_t touchMs() {
+    uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+    return (uint32_t)(mach_absolute_time() / ((f ? f : 19200000) / 1000));
+}
 void trackStrokes(unsigned count, const int *ids, const int *xs, const int *ys) {
     const uint32_t now = touchMs();
     for (unsigned i = 0; i < count; ++i) {
@@ -205,645 +288,377 @@ void trackStrokes(unsigned count, const int *ids, const int *xs, const int *ys) 
         if (ys[i] < native_touch_extent[2]) native_touch_extent[2] = ys[i];
         if (ys[i] > native_touch_extent[3]) native_touch_extent[3] = ys[i];
         unsigned k = 0;
-        while (k < gStrokeCount && gStrokes[k].id != ids[i]) ++k;
-        if (k == gStrokeCount) {
-            if (gStrokeCount == 10) continue;
-            gStrokes[gStrokeCount++] = {ids[i], xs[i], ys[i], xs[i], ys[i], 0, now};
+        while (k < strokeCount && strokes[k].id != ids[i]) ++k;
+        if (k == strokeCount) {
+            if (strokeCount == NVT_POINT_SLOTS) continue;
+            strokes[strokeCount++] = {ids[i], xs[i], ys[i], xs[i], ys[i], 0, now};
         }
-        gStrokes[k].x1 = xs[i];
-        gStrokes[k].y1 = ys[i];
-        ++gStrokes[k].frames;
+        strokes[k].x1 = xs[i]; strokes[k].y1 = ys[i]; ++strokes[k].frames;
     }
-    for (unsigned k = 0; k < gStrokeCount;) {
+    for (unsigned k = 0; k < strokeCount;) {
         bool live = false;
-        for (unsigned i = 0; i < count && !live; ++i) live = (ids[i] == gStrokes[k].id);
-        if (live) { ++k; continue; }
-        volatile int *r = native_touch_strokes[native_touch_stroke_count & 15u];
-        r[0] = static_cast<int>(gStrokes[k].t0);
-        r[1] = static_cast<int>(now - gStrokes[k].t0);
-        r[2] = gStrokes[k].x0; r[3] = gStrokes[k].y0;
-        r[4] = gStrokes[k].x1; r[5] = gStrokes[k].y1;
-        r[6] = gStrokes[k].frames;
+        for (unsigned i = 0; i < count && !live; ++i) live = ids[i] == strokes[k].id;
+        if (live) {++k; continue;}
+        volatile int32_t *r = native_touch_strokes[native_touch_stroke_count & 15];
+        r[0] = (int32_t)strokes[k].t0; r[1] = (int32_t)(now - strokes[k].t0);
+        r[2] = strokes[k].x0; r[3] = strokes[k].y0; r[4] = strokes[k].x1; r[5] = strokes[k].y1; r[6] = strokes[k].frames;
         native_touch_stroke_count = native_touch_stroke_count + 1;
-        gStrokes[k] = gStrokes[--gStrokeCount];
+        strokes[k] = strokes[--strokeCount];
     }
 }
 
-void updateDiag(const Session &s) {
-    snprintf(native_touch_rows[0], sizeof native_touch_rows[0],
-        "J716F-GT7386 stg%u/%u stp%u err%d rpmh(%d,%d,%d) vote%08x cbcr(%08x,%08x,%08x)",
-        native_touch_stage, native_touch_stage_req, s.step, s.err,
-        s.rpmhRc[0], s.rpmhRc[1], s.rpmhRc[2], s.voteReg, s.cbcr[0], s.cbcr[2], s.cbcr[4]);
-    snprintf(native_touch_rows[1], sizeof native_touch_rows[1],
-        "TCH se fw%08x if%x hw%08x dma%u sm(%d/%d/e%d) clk(%u,%04x,%08x) pin(%03x,%03x,%03x,%03x)",
-        s.fwRev, s.ifDis, s.hwParam0, s.useDma ? 1u : 0u, s.smmuSlot, s.smmuBank, s.smmuErr,
-        s.clkSel, s.clkCfg & 0xffffu, s.sclCfg, s.pinCfg[0], s.pinCfg[1], s.pinCfg[2], s.pinCfg[3]);
-    snprintf(native_touch_rows[2], sizeof native_touch_rows[2],
-        "TCH addr0x%02x pid'%s' rdy%u ok%u bad%u i2ce%u irqe%u c%d (%d,%d) hid%u",
-        s.slaveAddr, s.pidStr, s.readyFrames, s.validFrames, s.badCsum, s.i2cErrors, s.irqEdges,
-        s.lastContacts, s.lastX, s.lastY, native_touch_hid_reports);
-    snprintf(native_touch_rows[3], sizeof native_touch_rows[3],
-        "TCH lastIrq%08x dTx%x dRx%x ver(%02x%02x%02x%02x_%02x%02x%02x%02x) raw(%02x%02x_%02x%02x%02x%02x%02x)",
-        s.lastIrq, s.lastDmaTx, s.lastDmaRx,
-        s.verBuf[0], s.verBuf[1], s.verBuf[2], s.verBuf[3], s.verBuf[4], s.verBuf[5], s.verBuf[6], s.verBuf[7],
-        s.lastRaw[0], s.lastRaw[1], s.lastRaw[2], s.lastRaw[3], s.lastRaw[4], s.lastRaw[5], s.lastRaw[6]);
-    snprintf(native_touch_trace[3], sizeof native_touch_trace[3],
-        "TCH polls%u rdy%u ok%u bad%u raw %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
-        s.polls, s.readyFrames, s.validFrames, s.badCsum,
-        s.lastRaw[0], s.lastRaw[1], s.lastRaw[2], s.lastRaw[3], s.lastRaw[4],
-        s.lastRaw[5], s.lastRaw[6], s.lastRaw[7], s.lastRaw[8], s.lastRaw[9]);
-}
-
-int voteRpmhRail(uintptr_t dbVa, uintptr_t tcsVa, const QcomRscLayout &layout, const char *name, uint32_t mv) {
-    QcomRpmhResource res = {};
-    int r = qcom_cmd_db_find(reinterpret_cast<const uint8_t *>(dbVa), TB_CMD_DB_SIZE, name, &res);
-    if (r != QcomRpmhOk) return r;
-    const uint32_t addrs[3] = { res.address + 8u, res.address + 0u, res.address + 4u };
-    const uint32_t vals[3]  = { 7u, mv, 1u }; // mode 7 (HPM), voltage mV, enable 1
-    QcomRpmhWrite writes[16] = {};
-    // Wait briefly if TCS 0 is busy
-    for (unsigned i = 0; i < 2000; ++i) {
-        if (rd32(tcsVa, layout.status) != 0u) break; // status bit0 == 1 means idle in RSC v2/v3? Check irq/busy safely
-        IODelay(5);
+// The finger set in the digitizer's units (x 0..30480 across the firmware's x range, y 0..20320 across its y range), under the
+// sequence lock TouchState.cpp describes, then the HID input's notification. Whether the firmware's axes match the panel's
+// (orientation, mirroring) is for the first strokes on the tablet to show (native_touch_strokes).
+void publish(unsigned count, const nvt_point *p, const nvt_fw_info &info) {
+    int ids[NVT_POINT_SLOTS], xs[NVT_POINT_SLOTS], ys[NVT_POINT_SLOTS];
+    const unsigned xmax = info.abs_x_max ? info.abs_x_max : 1, ymax = info.abs_y_max ? info.abs_y_max : 1;
+    for (unsigned i = 0; i < count && i < NVT_POINT_SLOTS; ++i) {
+        ids[i] = p[i].id;
+        xs[i] = static_cast<int>(p[i].x * 30480u / xmax);
+        ys[i] = static_cast<int>(p[i].y * 20320u / ymax);
     }
-    // Clear any stale completion status on TCS 0 before issuing active request
-    QcomRpmhWrite fin[8] = {};
-    unsigned fn = qcom_rpmh_finish(&layout, 0, fin, 8);
-    for (unsigned i = 0; i < fn; ++i) wr32(tcsVa, fin[i].offset, fin[i].value);
-
-    unsigned wn = qcom_rpmh_active_request(&layout, 0, addrs, vals, 3, writes, 16);
-    if (!wn) return -10;
-    for (unsigned i = 0; i < wn; ++i) wr32(tcsVa, writes[i].offset, writes[i].value);
-    bool done = false;
-    for (unsigned i = 0; i < 5000; ++i) {
-        if (rd32(tcsVa, layout.irq_status) & 1u) { done = true; break; }
-        IODelay(5);
-    }
-    fn = qcom_rpmh_finish(&layout, 0, fin, 8);
-    for (unsigned i = 0; i < fn; ++i) wr32(tcsVa, fin[i].offset, fin[i].value);
-    IOSleep(2);
-    return done ? 0 : -110;
-}
-
-void votePowerRails(Session &s) {
-    s.step = 1;
-    if (!mapRegion(TB_CMD_DB_BASE, TB_CMD_DB_SIZE, s.cmdDb) ||
-        !mapRegion(TB_RSC_DRV_BASE, TB_RSC_DRV_SIZE, s.rscDrv)) {
-        s.rpmhRc[0] = -12;
-        return;
-    }
-    const uint32_t drvId = rd32(s.rscDrv.va, 0);
-    const QcomRscLayout layout = qcom_rsc_layout(drvId);
-    const uintptr_t tcsVa = s.rscDrv.va + TB_RSC_TCS_OFFSET;
-    // Ensure TCS 0/1 irq status latching is enabled (TCS_IRQ_ENABLE at +0x00 of TCS block)
-    wr32(tcsVa, 0u, rd32(tcsVa, 0u) | 3u);
-    s.rpmhRc[0] = voteRpmhRail(s.cmdDb.va, tcsVa, layout, "ldoa13", 3008);
-    s.rpmhRc[1] = voteRpmhRail(s.cmdDb.va, tcsVa, layout, "ldoa14", 1800);
-    s.rpmhRc[2] = voteRpmhRail(s.cmdDb.va, tcsVa, layout, "ldoc1",  1800);
-    IOSleep(25);
-}
-
-bool enableClocksAndPins(Session &s) {
-    s.step = 2;
-    if (!mapRegion(TB_GCC_BASE + 0x00000u, 0x1000u, s.gccLow) ||
-        !mapRegion(TB_GCC_BASE + 0x18000u, 0x1000u, s.gccQup1) ||
-        !mapRegion(TB_GCC_BASE + 0x23000u, 0x1000u, s.gccCore) ||
-        !mapRegion(TB_GCC_BASE + 0x52000u, 0x1000u, s.gccVote) ||
-        !mapRegion(TB_TLMM_SOUTH_BASE + TB_GPIO_I2C_SDA * TB_GPIO_STRIDE, 4u * TB_GPIO_STRIDE, s.tlmmPins)) {
-        s.err = -12;
-        return false;
-    }
-
-    // Vote GPLL0 & QUPv3 Wrap1 SE5 clocks
-    wr32(s.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfffu, rd32(s.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfffu) | 1u);
-    for (unsigned i = 0; i < 5000 && !(rd32(s.gccLow.va, TB_GCC_GPLL0_MODE) & (1u << 31)); ++i) IODelay(10);
-
-    wr32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfffu, rd32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfffu) | TB_VOTE_ALL);
-    auto running = [](uint32_t cbcr) { return !(cbcr & TB_CBCR_CLK_OFF) || (cbcr & 2u); };
-    bool ok = false;
-    for (unsigned i = 0; i < 3000 && !ok; ++i) {
-        s.cbcr[0] = rd32(s.gccQup1.va, TB_HALT_M_AHB & 0xfffu);
-        s.cbcr[1] = rd32(s.gccQup1.va, TB_HALT_S_AHB & 0xfffu);
-        s.cbcr[2] = rd32(s.gccCore.va, TB_HALT_CORE & 0xfffu);
-        s.cbcr[3] = rd32(s.gccCore.va, TB_HALT_CORE_2X & 0xfffu);
-        s.cbcr[4] = rd32(s.gccQup1.va, TB_HALT_S5 & 0xfffu);
-        ok = running(s.cbcr[0]) && running(s.cbcr[1]) && running(s.cbcr[2]) && running(s.cbcr[3]) && !(s.cbcr[4] & TB_CBCR_CLK_OFF);
-        if (!ok) IODelay(10);
-    }
-    s.voteReg = rd32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfffu);
-    if (!ok) { s.err = -110; return false; }
-
-    // Select 19.2 MHz source on S5_RCG (0x18600)
-    const uint32_t dfsr = rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_DFSR_CMD) & 0xfffu);
-    s.clkSel = 0;
-    if (dfsr & 1u) {
-        for (unsigned l = 0; l < TB_DFS_LEVELS; ++l) {
-            uint32_t cfg = rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_PERF_CFG(l)) & 0xfffu);
-            uint32_t m   = rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_PERF_M(l)) & 0xfffu);
-            uint32_t n   = rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_PERF_N(l)) & 0xfffu);
-            if (tb_dfs_level_hz(cfg, m, n) == 19200000ULL) { s.clkSel = l; break; }
-        }
-    } else {
-        uint32_t cfg = rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_CFG) & 0xfffu);
-        if (tb_dfs_level_hz(cfg, 0, 0) != 19200000ULL) {
-            wr32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_CFG) & 0xfffu, 0u); // TCXO 19.2 MHz, div 1
-            wr32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_CMD) & 0xfffu, rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_CMD) & 0xfffu) | 1u);
-            for (unsigned i = 0; i < 1000 && (rd32(s.gccQup1.va, (TB_S5_RCG + TB_RCG_CMD) & 0xfffu) & 1u); ++i) IODelay(5);
-        }
-    }
-
-    // Configure GPIO 36 (SDA) & GPIO 37 (SCL): func 1 (qup13), 2mA (0), pull-up (3) -> 0x07
-    wr32(s.tlmmPins.va, 0u * TB_GPIO_STRIDE, 0x007u);
-    wr32(s.tlmmPins.va, 1u * TB_GPIO_STRIDE, 0x007u);
-    // Configure GPIO 39 (IRQ): input, pull-up (3), 8mA (3<<6) -> 0x0c3; latch falling edge raw status without GIC IRQ
-    wr32(s.tlmmPins.va, 3u * TB_GPIO_STRIDE, 0x0c3u);
-    wr32(s.tlmmPins.va, 3u * TB_GPIO_STRIDE + 0x8u, (1u << 4) | (2u << 2));
-    wr32(s.tlmmPins.va, 3u * TB_GPIO_STRIDE + 0xcu, 0u);
-    // Configure GPIO 38 (Reset): output enabled (1<<9), 8mA (3<<6), pull-up (3) -> 0x2c3; pulse LOW 15ms -> HIGH 440ms
-    wr32(s.tlmmPins.va, 2u * TB_GPIO_STRIDE, 0x2c3u);
-    wr32(s.tlmmPins.va, 2u * TB_GPIO_STRIDE + 0x4u, 0u);   // Reset LOW
-    IOSleep(15);
-    wr32(s.tlmmPins.va, 2u * TB_GPIO_STRIDE + 0x4u, 2u);   // Reset HIGH
-    IOSleep(440);
-
-    for (unsigned i = 0; i < 4; ++i) s.pinCfg[i] = rd32(s.tlmmPins.va, i * TB_GPIO_STRIDE);
-    return true;
-}
-
-void geniRecover(Session &s) {
-    const uintptr_t se = s.se.va;
-    wr32(se, kGeniTxWatermark, 0);
-    wr32(se, kGeniMCmdCtrl, kCmdCtrlCancel);
-    for (unsigned i = 0; i < 5000; ++i) {
-        uint32_t st = rd32(se, kGeniMIrqStatus);
-        if (st & (kMCmdCancelDone | kMCmdDone)) { wr32(se, kGeniMIrqClear, st); break; }
-        IODelay(2);
-    }
-    if (rd32(se, kGeniStatus) & 1u) {
-        wr32(se, kGeniMCmdCtrl, kCmdCtrlAbort);
-        for (unsigned i = 0; i < 5000; ++i) {
-            uint32_t st = rd32(se, kGeniMIrqStatus);
-            if (st & (kMCmdAbortDone | kMCmdDone)) { wr32(se, kGeniMIrqClear, st); break; }
-            IODelay(2);
-        }
-    }
-    if (s.useDma) {
-        wr32(se, kSeDmaTxFsmRst, 1u);
-        wr32(se, kSeDmaRxFsmRst, 1u);
-        wr32(se, kSeDmaTxIrqClr, 0xffffffffu);
-        wr32(se, kSeDmaRxIrqClr, 0xffffffffu);
-    }
-    wr32(se, kGeniMIrqClear, 0xffffffffu);
-}
-
-bool initGeniI2c(Session &s) {
-    s.step = 3;
-    if (!mapRegion(TB_QUP_WRAPPER_BASE, 0x2000u, s.wrapper) ||
-        !mapRegion(TB_SE_BASE, TB_SE_SIZE, s.se)) {
-        s.err = -12;
-        return false;
-    }
-    const uintptr_t se = s.se.va;
-    s.qupVer   = rd32(s.wrapper.va, 0x4u);
-    s.fwRev    = rd32(se, kGeniFwRevision);
-    s.ifDis    = rd32(se, kGeniIfDisable);
-    s.hwParam0 = rd32(se, kSeHwParam0);
-
-    const uint32_t proto = (s.fwRev >> 8) & 0xffu;
-    if (proto != 3u) { s.err = -71; return false; } // Must be GENI_PROTO_I2C (3)
-
-    uint32_t major = s.qupVer >> 28, minor = (s.qupVer >> 16) & 0xfffu;
-    uint32_t depthMask = ((major == 3 && minor >= 10) || major > 3) ? 0xff0000u : 0x3f0000u;
-    s.txFifoDepth = (s.hwParam0 & depthMask) >> 16;
-    if (s.txFifoDepth < 4) s.txFifoDepth = 16;
-
-    // Common GENI SE init & 400 kHz I2C timing from 19.2 MHz source
-    wr32(se, kSeGsiEventEn, 0u);
-    wr32(se, kGeniMIrqClear, 0xffffffffu);
-    wr32(se, kGeniSIrqClear, 0xffffffffu);
-    wr32(se, kSeDmaTxIrqClr, 0xffffffffu);
-    wr32(se, kSeDmaRxIrqClr, 0xffffffffu);
-    wr32(se, kGeniCgcCtrl, rd32(se, kGeniCgcCtrl) | 0x7fu);
-    wr32(se, kSeDmaGeneralCfg, rd32(se, kSeDmaGeneralCfg) | 0x0fu);
-    wr32(se, kGeniOutputCtrl, 0x7fu);
-    wr32(se, kGeniForceDefault, 1u);
-
-    wr32(se, kGeniClkSel, s.clkSel);
-    wr32(se, kGeniClkCfg, (2u << 4) | 1u);
-    wr32(se, kGeniSclCounters, (5u << 20) | (11u << 10) | 22u);
-    s.clkCfg = rd32(se, kGeniClkCfg);
-    s.sclCfg = rd32(se, kGeniSclCounters);
-
-    // 8-bit byte packing (4 bytes per 32-bit word, LSB first on wire)
-    wr32(se, kGeniTxPack0, 0x7f8feu);
-    wr32(se, kGeniTxPack1, 0xffefeu);
-    wr32(se, kGeniRxPack0, 0x7f8feu);
-    wr32(se, kGeniRxPack1, 0xffefeu);
-    wr32(se, kGeniByteGran, 0u);
-
-    s.useDma = (s.ifDis & 1u) != 0u;
-    if (!s.useDma) {
-        wr32(se, kGeniDmaModeEn, 0u);
-        wr32(se, kGeniTxWatermark, 0u);
-        wr32(se, kGeniRxWatermark, s.txFifoDepth - 3u);
-        wr32(se, kGeniRxRfrWatermark, s.txFifoDepth - 2u);
-        wr32(se, kGeniMIrqEn, kMCmdDone | kMErrors | kMCmdCancelDone | kMCmdAbortDone |
-                              kMTxWatermark | kMRxWatermark | kMRxLast);
-        wr32(se, kSeIrqEn, rd32(se, kSeIrqEn) | (1u << 2));
-        return true;
-    }
-
-    // SE-DMA fallback when bootloader left FIFO_IF_DISABLE = 1 (GSI mode)
-    s.step = 31;
-    s.dmaMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-        2 * kDmaBufHalf, 0xfffffff000ULL);
-    if (!s.dmaMem || s.dmaMem->prepare() != kIOReturnSuccess) { s.err = -12; return false; }
-    addr64_t segLen = 0;
-    uint64_t phys = s.dmaMem->getPhysicalSegment(0, &segLen);
-    uint8_t *virt = static_cast<uint8_t *>(s.dmaMem->getBytesNoCopy());
-    if (!virt || !phys || segLen < 2 * kDmaBufHalf) { s.err = -14; return false; }
-    memset(virt, 0, 2 * kDmaBufHalf);
-    cacheRange(virt, 2 * kDmaBufHalf, 1);
-    s.dmaTx = virt;
-    s.dmaRx = virt + kDmaBufHalf;
-    s.dmaTxPhys = phys;
-    s.dmaRxPhys = phys + kDmaBufHalf;
-
-    if (!mapRegion(TB_APPS_SMMU_BASE, TB_APPS_SMMU_SIZE, s.smmu)) { s.err = -12; return false; }
-    struct smmu_io sio = { reinterpret_cast<void *>(s.smmu.va), smmuRd, smmuWr };
-    struct smmu_plan plan = smmu_plan_bypass(&sio, TB_QUP_SMMU_SID, phys, 2 * kDmaBufHalf);
-    s.smmuSlot = static_cast<int>(plan.slot);
-    s.smmuBank = static_cast<int>(plan.bank);
-    if (plan.error) { s.smmuErr = 1; s.err = -101; return false; }
-    if (smmu_configure_bypass(&sio, &plan, TB_QUP_SMMU_SID)) { s.smmuErr = 2; s.err = -102; return false; }
-
-    wr32(se, kGeniMIrqEn, kMErrors | kMCmdCancelDone | kMCmdAbortDone);
-    wr32(se, kGeniDmaModeEn, 1u);
-    wr32(se, kSeIrqEn, 0x7u); // DMA_RX | DMA_TX | M_IRQ
-    return true;
-}
-
-int i2cWriteRaw(Session &s, uint8_t addr, const uint8_t *buf, uint32_t len, bool hold) {
-    if (!len || len > 512) return -22;
-    const uintptr_t se = s.se.va;
-    const uint32_t param = (static_cast<uint32_t>(addr) << 9) | (hold ? kI2cStopStretch : 0u);
-
-    if (s.useDma) {
-        for (uint32_t i = 0; i < len; ++i) s.dmaTx[i] = buf[i];
-        cacheRange(s.dmaTx, len, 0);
-        wr32(se, kGeniMIrqClear, 0xffffffffu);
-        wr32(se, kSeDmaTxIrqClr, 0xffffffffu);
-        wr32(se, kGeniTxLen, len);
-        wr32(se, kGeniMCmd0, (kI2cOpWrite << 27) | param);
-        wr32(se, kSeDmaTxIrqEnSet, kDmaDone | kDmaEot | kDmaAhbErr);
-        wr32(se, kSeDmaTxPtrL, static_cast<uint32_t>(s.dmaTxPhys));
-        wr32(se, kSeDmaTxPtrH, static_cast<uint32_t>(s.dmaTxPhys >> 32));
-        wr32(se, kSeDmaTxAttr, 1u);
-        wr32(se, kSeDmaTxLen, len);
-        for (unsigned poll = 0; poll < 50000; ++poll) {
-            uint32_t ts = rd32(se, kSeDmaTxIrqStat);
-            uint32_t ms = rd32(se, kGeniMIrqStatus);
-            if (ts) wr32(se, kSeDmaTxIrqClr, ts);
-            if (ms) wr32(se, kGeniMIrqClear, ms);
-            if ((ts & kDmaAhbErr) || (ms & kMErrors)) {
-                s.lastIrq = ms; s.lastDmaTx = ts; ++s.i2cErrors;
-                geniRecover(s);
-                return -5;
-            }
-            if (ts & kDmaDone) return 0;
-            IODelay(1);
-        }
-        s.lastIrq = rd32(se, kGeniMIrqStatus); s.lastDmaTx = rd32(se, kSeDmaTxIrqStat); ++s.i2cErrors;
-        geniRecover(s);
-        return -110;
-    }
-
-    // FIFO mode
-    wr32(se, kGeniMIrqClear, 0xffffffffu);
-    wr32(se, kGeniTxLen, len);
-    wr32(se, kGeniMCmd0, (kI2cOpWrite << 27) | param);
-    uint32_t pushed = 0;
-    wr32(se, kGeniTxWatermark, 1u);
-    for (unsigned poll = 0; poll < 50000; ++poll) {
-        uint32_t st = rd32(se, kGeniMIrqStatus);
-        if (!st) { IODelay(1); continue; }
-        wr32(se, kGeniMIrqClear, st);
-        if (st & kMErrors) {
-            s.lastIrq = st; ++s.i2cErrors;
-            geniRecover(s);
-            return -5;
-        }
-        if ((st & kMTxWatermark) && pushed < len) {
-            unsigned space = s.txFifoDepth > 1 ? (s.txFifoDepth - 1u) : 1u;
-            for (unsigned w = 0; w < space && pushed < len; ++w) {
-                uint32_t word = 0;
-                for (unsigned b = 0; b < 4 && pushed < len; ++b, ++pushed) {
-                    word |= static_cast<uint32_t>(buf[pushed]) << (8u * b);
-                }
-                wr32(se, kGeniTxFifo, word);
-            }
-            if (pushed >= len) wr32(se, kGeniTxWatermark, 0u);
-        }
-        if (st & kMCmdDone) {
-            wr32(se, kGeniTxWatermark, 0u);
-            return (pushed >= len) ? 0 : -5;
-        }
-    }
-    s.lastIrq = rd32(se, kGeniMIrqStatus); ++s.i2cErrors;
-    geniRecover(s);
-    return -110;
-}
-
-int i2cReadRaw(Session &s, uint8_t addr, uint8_t *out, uint32_t len) {
-    if (!len || len > 512) return -22;
-    const uintptr_t se = s.se.va;
-    const uint32_t param = (static_cast<uint32_t>(addr) << 9);
-
-    if (s.useDma) {
-        for (uint32_t i = 0; i < len; ++i) s.dmaRx[i] = 0x5au;
-        cacheRange(s.dmaRx, len, 1);
-        wr32(se, kGeniMIrqClear, 0xffffffffu);
-        wr32(se, kSeDmaRxIrqClr, 0xffffffffu);
-        wr32(se, kGeniRxLen, len);
-        wr32(se, kGeniMCmd0, (kI2cOpRead << 27) | param);
-        wr32(se, kSeDmaRxIrqEnSet, kDmaDone | kDmaEot | kDmaAhbErr);
-        wr32(se, kSeDmaRxPtrL, static_cast<uint32_t>(s.dmaRxPhys));
-        wr32(se, kSeDmaRxPtrH, static_cast<uint32_t>(s.dmaRxPhys >> 32));
-        wr32(se, kSeDmaRxAttr, 0u);
-        wr32(se, kSeDmaRxLen, len);
-        for (unsigned poll = 0; poll < 50000; ++poll) {
-            uint32_t rs = rd32(se, kSeDmaRxIrqStat);
-            uint32_t ms = rd32(se, kGeniMIrqStatus);
-            if (rs) wr32(se, kSeDmaRxIrqClr, rs);
-            if (ms) wr32(se, kGeniMIrqClear, ms);
-            if ((rs & kDmaAhbErr) || (ms & kMErrors)) {
-                s.lastIrq = ms; s.lastDmaRx = rs; ++s.i2cErrors;
-                geniRecover(s);
-                return -5;
-            }
-            if (rs & kDmaDone) {
-                cacheRange(s.dmaRx, len, 2);
-                for (uint32_t i = 0; i < len; ++i) out[i] = s.dmaRx[i];
-                return 0;
-            }
-            IODelay(1);
-        }
-        s.lastIrq = rd32(se, kGeniMIrqStatus); s.lastDmaRx = rd32(se, kSeDmaRxIrqStat); ++s.i2cErrors;
-        geniRecover(s);
-        return -110;
-    }
-
-    // FIFO mode
-    wr32(se, kGeniMIrqClear, 0xffffffffu);
-    wr32(se, kGeniRxLen, len);
-    wr32(se, kGeniMCmd0, (kI2cOpRead << 27) | param);
-    uint32_t got = 0;
-    for (unsigned poll = 0; poll < 50000; ++poll) {
-        uint32_t st = rd32(se, kGeniMIrqStatus);
-        if (!st) { IODelay(1); continue; }
-        wr32(se, kGeniMIrqClear, st);
-        if (st & kMErrors) {
-            s.lastIrq = st; ++s.i2cErrors;
-            geniRecover(s);
-            return -5;
-        }
-        if (st & (kMRxWatermark | kMRxLast | kMCmdDone)) {
-            uint32_t fs = rd32(se, kGeniRxFifoStatus);
-            uint32_t wc = fs & 0x1ffffffu;
-            for (uint32_t w = 0; w < wc; ++w) {
-                uint32_t word = rd32(se, kGeniRxFifo);
-                for (unsigned b = 0; b < 4 && got < len; ++b, ++got) {
-                    out[got] = static_cast<uint8_t>(word >> (8u * b));
-                }
-            }
-        }
-        if (st & kMCmdDone) {
-            return (got >= len) ? 0 : -5;
-        }
-    }
-    s.lastIrq = rd32(se, kGeniMIrqStatus); ++s.i2cErrors;
-    geniRecover(s);
-    return -110;
-}
-
-int gtx8WriteReg(Session &s, uint16_t reg, const uint8_t *data, uint32_t len) {
-    uint8_t buf[32];
-    if (len + 2 > sizeof buf) return -22;
-    buf[0] = static_cast<uint8_t>(reg >> 8);
-    buf[1] = static_cast<uint8_t>(reg & 0xffu);
-    for (uint32_t i = 0; i < len; ++i) buf[2 + i] = data[i];
-    return i2cWriteRaw(s, s.slaveAddr, buf, len + 2u, false);
-}
-
-int gtx8ReadReg(Session &s, uint16_t reg, uint8_t *out, uint32_t len) {
-    const uint8_t regBe[2] = { static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg & 0xffu) };
-    int rc = i2cWriteRaw(s, s.slaveAddr, regBe, 2u, true); // Repeated Start (STOP_STRETCH)
-    if (rc != 0) {
-        // Fallback: non-stretched write + read in case controller firmware dislikes stretch
-        rc = i2cWriteRaw(s, s.slaveAddr, regBe, 2u, false);
-        if (rc != 0) return rc;
-    }
-    return i2cReadRaw(s, s.slaveAddr, out, len);
-}
-
-bool probeGoodix(Session &s) {
-    s.step = 4;
-    const uint8_t candidates[2] = { GTX8_ADDR_PRIMARY, GTX8_ADDR_FALLBACK };
-    for (unsigned c = 0; c < 2; ++c) {
-        s.slaveAddr = candidates[c];
-        const uint8_t hs = 0xaa;
-        (void)gtx8WriteReg(s, GTX8_REG_HANDSHAKE, &hs, 1u);
-        IOSleep(5);
-        memset(s.verBuf, 0, sizeof s.verBuf);
-        if (gtx8ReadReg(s, GTX8_REG_VERSION, s.verBuf, 12u) == 0) {
-            for (unsigned i = 0; i < 4; ++i) {
-                char ch = static_cast<char>(s.verBuf[4 + i]);
-                s.pidStr[i] = (ch >= 0x20 && ch <= 0x7e) ? ch : '?';
-            }
-            s.pidStr[4] = 0;
-            const uint8_t zero2[2] = {0, 0};
-            (void)gtx8WriteReg(s, GTX8_REG_TOUCH_DATA, zero2, 2u);
-            return true;
-        }
-    }
-    s.err = -19; // ENODEV
-    return false;
-}
-
-void publishPoints(Session &s, unsigned count, const TouchPoint *pts) {
-    if (__atomic_load_n(&native_touch_injecting, __ATOMIC_ACQUIRE)) return;
-    if (count > 10) count = 10;
-    int ids[10], xs[10], ys[10];
-    for (unsigned i = 0; i < count; ++i) {
-        int rx = pts[i].x;
-        int ry = pts[i].y;
-        int maxX = static_cast<int>(TB_PANEL_MAX_X) - 1;
-        int maxY = static_cast<int>(TB_PANEL_MAX_Y) - 1;
-        if (s.swapXY) {
-            int tmp = rx; rx = ry; ry = tmp;
-            tmp = maxX; maxX = maxY; maxY = tmp;
-        }
-        if (rx < 0) rx = 0; else if (rx > maxX) rx = maxX;
-        if (ry < 0) ry = 0; else if (ry > maxY) ry = maxY;
-        if (s.flipX) rx = maxX - rx;
-        if (s.flipY) ry = maxY - ry;
-        ids[i] = pts[i].id;
-        xs[i] = static_cast<int>(static_cast<int64_t>(rx) * TB_HID_MAX_X / maxX);
-        ys[i] = static_cast<int>(static_cast<int64_t>(ry) * TB_HID_MAX_Y / maxY);
-    }
+    if (count > NVT_POINT_SLOTS) count = NVT_POINT_SLOTS;
     trackStrokes(count, ids, xs, ys);
-    s.lastContacts = static_cast<int>(count);
-    if (count > 0) { s.lastX = xs[0]; s.lastY = ys[0]; }
-
-    native_touch_seq = native_touch_seq + 1u;
+    native_touch_seq = native_touch_seq + 1;
     __asm__ volatile("dmb ish" ::: "memory");
     native_touch_count = count;
-    for (unsigned i = 0; i < count; ++i) {
-        native_touch_ids[i] = ids[i];
-        native_touch_xs[i]  = xs[i];
-        native_touch_ys[i]  = ys[i];
-    }
+    for (unsigned i = 0; i < count; ++i) {native_touch_xs[i] = xs[i]; native_touch_ys[i] = ys[i]; native_touch_ids[i] = ids[i];}
     __asm__ volatile("dmb ish" ::: "memory");
-    native_touch_seq = native_touch_seq + 1u;
+    native_touch_seq = native_touch_seq + 1;
     native_touch_published();
 }
 
-void touchThread(void *, wait_result_t) {
+bool snapshot(Session &s) {
+    mark(s, 1);
+    if (!mapRegion(TB_GCC_BASE + 0x0000, 0x1000, s.gccLow) || !mapRegion(TB_GCC_BASE + 0x17000, 0x1000, s.gccQup) ||
+        !mapRegion(TB_GCC_BASE + 0x23000, 0x1000, s.gccCore) || !mapRegion(TB_GCC_BASE + 0x52000, 0x1000, s.gccVote) ||
+        !mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_GPIO_IRQ), 0x1000, s.tlmmIrq) ||
+        !mapRegion(TB_TLMM_BASE + tb_tlmm_ctl(TB_GPIO_SPI_FIRST), 4 * TB_GPIO_STRIDE, s.tlmmSpi)) {
+        fail(1, -12);
+        return false;
+    }
+    uint32_t *v = s.vals;
+    v[0] = rd32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfff);
+    v[1] = rd32(s.gccQup.va, TB_HALT_M_AHB & 0xfff);
+    v[2] = rd32(s.gccQup.va, TB_HALT_S_AHB & 0xfff);
+    v[3] = rd32(s.gccCore.va, TB_HALT_CORE & 0xfff);
+    v[4] = rd32(s.gccCore.va, TB_HALT_CORE_2X & 0xfff);
+    v[5] = rd32(s.gccQup.va, TB_HALT_S4 & 0xfff);
+    v[6] = rd32(s.gccLow.va, TB_GCC_GPLL0_MODE);
+    v[7] = rd32(s.gccQup.va, (TB_S4_RCG + TB_RCG_DFSR_CMD) & 0xfff);
+    v[8] = rd32(s.gccQup.va, (TB_S4_RCG + TB_RCG_CFG) & 0xfff);
+    // With DFS on (DFSR bit 0) the levels are the PERF registers; otherwise the plain RCG's one rate stands for every level.
+    const bool dfs = (v[7] & 1) != 0;
+    for (unsigned l = 0; l < TB_DFS_LEVELS; ++l) {
+        uint32_t cfg = dfs ? rd32(s.gccQup.va, (TB_S4_RCG + TB_RCG_PERF_CFG(l)) & 0xfff) : v[8];
+        uint32_t m = dfs ? rd32(s.gccQup.va, (TB_S4_RCG + TB_RCG_PERF_M(l)) & 0xfff) : rd32(s.gccQup.va, (TB_S4_RCG + 0x8) & 0xfff);
+        uint32_t n = dfs ? rd32(s.gccQup.va, (TB_S4_RCG + TB_RCG_PERF_N(l)) & 0xfff) : rd32(s.gccQup.va, (TB_S4_RCG + 0xc) & 0xfff);
+        s.levelHz[l] = tb_dfs_level_hz(cfg, m, n);
+        if (l < 4) s.vals[24 + l] = cfg;
+        if (!dfs) break;
+    }
+    for (unsigned i = 0; i < 4; ++i) v[9 + i] = rd32(s.tlmmSpi.va, i * TB_GPIO_STRIDE);
+    v[13] = rd32(s.tlmmIrq.va, 4);
+    return true;
+}
+
+bool enable(Session &s) {
+    mark(s, 2);
+    // GPLL0 feeds the DFS levels; vote for it (a shared vote, not an exclusive enable) and wait for lock.
+    wr32(s.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff, rd32(s.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff) | 1u);
+    for (unsigned i = 0; i < 10000 && !(rd32(s.gccLow.va, TB_GCC_GPLL0_MODE) & (1u << 31)); ++i) IODelay(10);
+    s.vals[6] = rd32(s.gccLow.va, TB_GCC_GPLL0_MODE);
+    wr32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfff, rd32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfff) | TB_VOTE_ALL);
+    // Branches with hardware clock gating (bit 1) show CLK_OFF while idle and wake on access, so only a branch without that bit
+    // must have CLK_OFF clear.
+    auto running = [](uint32_t cbcr) {return !(cbcr & TB_CBCR_CLK_OFF) || (cbcr & 2u);};
+    bool ok = false;
+    for (unsigned i = 0; i < 2000 && !ok; ++i) {
+        ok = running(rd32(s.gccQup.va, TB_HALT_M_AHB & 0xfff)) && running(rd32(s.gccQup.va, TB_HALT_S_AHB & 0xfff)) &&
+             !(rd32(s.gccCore.va, TB_HALT_CORE & 0xfff) & TB_CBCR_CLK_OFF) &&
+             !(rd32(s.gccCore.va, TB_HALT_CORE_2X & 0xfff) & TB_CBCR_CLK_OFF) &&
+             !(rd32(s.gccQup.va, TB_HALT_S4 & 0xfff) & TB_CBCR_CLK_OFF);
+        if (!ok) IODelay(10);
+    }
+    s.vals[0] = rd32(s.gccVote.va, TB_GCC_VOTE_ENABLE & 0xfff);
+    s.vals[1] = rd32(s.gccQup.va, TB_HALT_M_AHB & 0xfff);
+    s.vals[2] = rd32(s.gccQup.va, TB_HALT_S_AHB & 0xfff);
+    s.vals[3] = rd32(s.gccCore.va, TB_HALT_CORE & 0xfff);
+    s.vals[4] = rd32(s.gccCore.va, TB_HALT_CORE_2X & 0xfff);
+    s.vals[5] = rd32(s.gccQup.va, TB_HALT_S4 & 0xfff);
+    if (!ok) {fail(2, -110); return false;}   // never touch the engine without running clocks
+    const uint32_t cfg = tb_pin_cfg(TB_FUNC_QUP4, TB_DRIVE_6MA);
+    for (unsigned i = 0; i < 4; ++i) wr32(s.tlmmSpi.va, i * TB_GPIO_STRIDE, cfg);
+    for (unsigned i = 0; i < 4; ++i) s.vals[9 + i] = rd32(s.tlmmSpi.va, i * TB_GPIO_STRIDE);
+    mark(s, 3);   // the next accesses touch the engine: if the log stops here, the engine access hung
+    if (!mapRegion(TB_QUP_WRAPPER_BASE, 0x2000, s.wrapper) || !mapRegion(TB_SE_BASE, TB_SE_SIZE, s.se)) {fail(3, -12); return false;}
+    s.spi.se = (struct geni_io){reinterpret_cast<void *>(s.se.va), ioRd, ioWr, ioDelayUs};
+    s.spi.wrapper = (struct geni_io){reinterpret_cast<void *>(s.wrapper.va), ioRd, ioWr, ioDelayUs};
+    mark(s, 31);   // first engine register read
+    int r = geni_spi_read_info(&s.spi);
+    s.vals[14] = s.spi.info.qup_hw_version;
+    s.vals[15] = s.spi.info.fw_revision;
+    s.vals[16] = s.spi.info.if_disable;
+    s.vals[17] = s.spi.info.hw_param0;
+    if (r) {fail(3, r); return false;}
+    return true;
+}
+
+bool prepareDma(Session &s) {
+    mark(s, 41);
+    s.dmaMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
+                                                               2 * kDmaBytes, 0xfffffff000ULL);
+    if (!s.dmaMem || s.dmaMem->prepare() != kIOReturnSuccess) {fail(41, -12); return false;}
+    mark(s, 42);
+    addr64_t seg_len = 0;
+    s.dmaPhys = s.dmaMem->getPhysicalSegment(0, &seg_len);
+    uint8_t *virt = static_cast<uint8_t *>(s.dmaMem->getBytesNoCopy());
+    if (!virt || !s.dmaPhys || seg_len < 2 * kDmaBytes) {fail(42, -14); return false;}
+    memset(virt, 0, 2 * kDmaBytes);
+    cacheRange(virt, 2 * kDmaBytes, 1);
+    if (!mapRegion(TB_APPS_SMMU_BASE, TB_APPS_SMMU_SIZE, s.smmu)) {fail(43, -12); return false;}
+    mark(s, 43);
+    struct smmu_io io = {reinterpret_cast<void *>(s.smmu.va), smmuRd, smmuWr};
+    struct smmu_plan plan = smmu_plan_bypass(&io, TB_QUP_SMMU_SID, s.dmaPhys, 2 * kDmaBytes);
+    s.smmuSlot = static_cast<int>(plan.slot); s.smmuBank = static_cast<int>(plan.bank);
+    if (plan.error) {s.smmuErr = smmuErrorCode(plan.error); fail(43, -100 - s.smmuErr); return false;}
+    const char *e = smmu_configure_bypass(&io, &plan, TB_QUP_SMMU_SID);
+    if (e) {s.smmuErr = smmuErrorCode(e); fail(44, -100 - s.smmuErr); return false;}
+    s.spi.use_dma = 1;
+    s.spi.dma.ctx = nullptr;
+    s.spi.dma.clean = dmaClean;
+    s.spi.dma.clean_inval = dmaCleanInval;
+    s.spi.dma.inval = dmaInval;
+    s.spi.dma.tx_virt = virt;
+    s.spi.dma.rx_virt = virt + kDmaBytes;
+    s.spi.dma.tx_phys = s.dmaPhys;
+    s.spi.dma.rx_phys = s.dmaPhys + kDmaBytes;
+    s.spi.dma.size = kDmaBytes;
+    return true;
+}
+
+bool openBus(Session &s) {
+    mark(s, 4);
+    s.spi.poll_limit = 400000;
+    s.spi.poll_only = 2;             // keep the top-level IRQ enable: the status registers must stay visible to the poll
+    // sheng's engine had FIFO_IF_DISABLE set by its firmware (GPI DMA mode) and needed the SE DMA path; pipa's is read in stage 2.
+    if (s.spi.info.fifo_disabled && !prepareDma(s)) return false;
+    int r = geni_spi_init(&s.spi);
+    if (r) {fail(4, r); return false;}
+    return true;
+}
+
+bool configureClock(Session &s, unsigned hz) {
+    struct tb_clock_choice choice = {};
+    if (tb_choose_clock(s.levelHz, TB_DFS_LEVELS, s.spi.oversampling, hz, &choice)) {fail(5, -22); return false;}
+    s.level = choice.level;
+    s.div = choice.div;
+    s.actualHz = choice.actual_hz;
+    int r = geni_spi_set_clock(&s.spi, hz, static_cast<unsigned>(choice.sclk_hz), choice.level);
+    if (r) {fail(5, r); return false;}
+    r = geni_spi_setup(&s.spi, TB_SPI_MODE, 0);
+    if (r) {fail(5, r); return false;}
+    return true;
+}
+
+// The attention line: GPIO39's TLMM interrupt detector set to rising edge (the DT's 0x2001) with its raw status latched but no
+// interrupt delivered (enable bit 0 clear), so the loop polls one register instead of taking an interrupt. pinctrl-sm8250.c
+// intr_cfg fields: enable 0, polarity 1, detection 3:2 (1 = rising edge), raw status 4, target 7:5; intr_status bit 0.
+constexpr uint32_t kIntrCfg = 0x8, kIntrStatus = 0xc;
+void armAttention(Session &s) {
+    wr32(s.tlmmIrq.va, kIntrCfg, (1u << 4) | (1u << 2) | (1u << 1));
+    wr32(s.tlmmIrq.va, kIntrStatus, 0);
+    s.irqCfg = rd32(s.tlmmIrq.va, kIntrCfg);
+}
+bool attention(Session &s) {
+    if (!(rd32(s.tlmmIrq.va, kIntrStatus) & 1)) return false;
+    wr32(s.tlmmIrq.va, kIntrStatus, 0);
+    return true;
+}
+}  // namespace
+
+// The firmware's coordinate range once the report loop runs, for the scripted strokes (autoTouchThread).
+static nvt_fw_info gAutoInfo;
+static volatile bool gAutoReady;
+
+static void touchThread(void *, wait_result_t) {
     Session *s = static_cast<Session *>(IOMallocType(Session));
-    if (!s) return;
+    if (!s) {fail(0, -12); return;}
     bzero(s, sizeof *s);
-    s->smmuSlot = -1;
-    s->smmuBank = -1;
-    s->lastX = -1;
-    s->lastY = -1;
-    for (unsigned i = 0; i < 10u; ++i) s->slotRaw[i] = -1;
-    s->pidStr[0] = '-'; s->pidStr[1] = 0;
-
-    PE_parse_boot_argn("j716f-touch-flipx",  &s->flipX,  sizeof s->flipX);
-    PE_parse_boot_argn("j716f-touch-flipy",  &s->flipY,  sizeof s->flipY);
-    PE_parse_boot_argn("j716f-touch-swapxy", &s->swapXY, sizeof s->swapXY);
-
-    votePowerRails(*s);
-    native_touch_stage = 1;
-    updateDiag(*s);
-
-    if (!enableClocksAndPins(*s)) { updateDiag(*s); return; }
-    native_touch_stage = 2;
-    updateDiag(*s);
-
-    if (!initGeniI2c(*s)) { updateDiag(*s); return; }
-    native_touch_stage = 3;
-    updateDiag(*s);
-
-    if (!probeGoodix(*s)) { updateDiag(*s); return; }
-    native_touch_stage = 5;
-    s->step = 5;
-    updateDiag(*s);
-
-    uint8_t buf[96];
-    const uint8_t zero2[2] = {0, 0};
-    unsigned prevPublished = 0;
-    for (;;) {
-        IOSleep(6);
-        if (++s->polls % 100u == 0u) updateDiag(*s);
-
-        if (rd32(s->tlmmPins.va, 3u * TB_GPIO_STRIDE + 0xcu) & 1u) {
-            wr32(s->tlmmPins.va, 3u * TB_GPIO_STRIDE + 0xcu, 0u);
-            ++s->irqEdges;
+    s->loopRc = 99;
+    unsigned stage = native_touch_stage_req, hz = TB_SPI_DEFAULT_HZ;
+    PE_parse_boot_argn("pipa-touch-hz", &hz, sizeof hz);
+    if (hz < 100000 || hz > TB_SPI_MAX_HZ) hz = TB_SPI_DEFAULT_HZ;
+    do {
+        if (!snapshot(*s)) break;
+        native_touch_stage_done = 1;
+        rows(*s);
+        if (stage < 2) break;
+        if (!enable(*s)) break;
+        native_touch_stage_done = 2;
+        rows(*s);
+        if (stage < 3) break;
+        if (!openBus(*s) || !configureClock(*s, hz)) break;
+        s->tx = static_cast<uint8_t *>(IOMalloc(NVT_TRANSFER_LEN + 8));
+        s->rx = static_cast<uint8_t *>(IOMalloc(NVT_READ_MAX + 2));
+        if (!s->tx || !s->rx) {fail(6, -12); break;}
+        s->bus = (struct nvt_bus){s, busXfer, busDelay};
+        mark(*s, 7);
+        // Engine loopback: MOSI is fed back to MISO inside the controller, isolating the FIFO/DMA, packing and clock path from the
+        // touch chip.
+        {
+            static const uint8_t pattern[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00};
+            geni_spi_setup(&s->spi, GENI_SPI_LOOP, 0);
+            s->loopRc = geni_spi_transfer(&s->spi, pattern, s->rx, sizeof pattern, 0);
+            for (unsigned k = 0; k < 16; ++k) s->loopRx[k] = s->rx[k];
+            geni_spi_setup(&s->spi, TB_SPI_MODE, 0);
+            rows(*s);
         }
+        // SPI mode: pipa-touch-mode=0..3 forces one; otherwise mode 0 (the vendor's) first, then the others until the chip id
+        // matches, as a hardware cross-check.
+        unsigned forced = 4;
+        PE_parse_boot_argn("pipa-touch-mode", &forced, sizeof forced);
+        static const unsigned order[4] = {0, 3, 1, 2};
+        int r = NVT_ERR_CHIP;
+        for (unsigned i = 0; i < 4 && r; ++i) {
+            unsigned m = forced < 4 ? forced : order[i];
+            geni_spi_setup(&s->spi, ((m & 1) ? GENI_SPI_CPHA : 0) | ((m & 2) ? GENI_SPI_CPOL : 0), 0);
+            s->chip = {};
+            s->chip.bus = &s->bus;
+            s->chip.scratch = s->tx;
+            s->chip.rxbuf = s->rx;
+            r = nvt_identify(&s->chip);
+            for (unsigned k = 0; k < 6; ++k) s->modeId[i][k] = s->chip.id[k];
+            s->modeRc[i] = r;
+            s->modeTried = i + 1;
+            s->modeUsed = m;
+            rows(*s);
+            if (forced < 4) break;
+        }
+        if (r) {fail(7, r); rows(*s); break;}
+        native_touch_stage_done = 3;
+        rows(*s);
+        if (stage < 4) break;
+        if (!&native_touch_firmware || !&native_touch_firmware_size || !native_touch_firmware_size) {fail(8, -2); break;}
+        mark(*s, 8);
+        struct nvt_fw fw;
+        r = nvt_fw_parse(&fw, native_touch_firmware, native_touch_firmware_size);
+        if (r) {fail(8, r); break;}
+        s->fwParts = fw.count; s->fwCasc = static_cast<unsigned>(fw.cascade_2nd_header);
+        s->fwIlm = fw.part[0].size; s->fwDlm = fw.part[1].size; s->fwSize = static_cast<unsigned>(native_touch_firmware_size);
+        mark(*s, 9);
+        s->chip.reset_retries = 60;   // vendor: 10 polls of 10 ms; longer here to tell "slow" from "never"
+        r = nvt_download_firmware(&s->chip, &fw);
+        if (r) {fail(9, r); rows(*s); break;}
+        mark(*s, 10);
+        r = nvt_start_reports(&s->chip, &s->info);
+        if (r == NVT_ERR_BUS || (r && !s->info.abs_x_max)) {fail(10, r); rows(*s); break;}
+        native_touch_stage_done = 4;
+        rows(*s);
+        if (stage < 5) break;
+        armAttention(*s);
+        mark(*s, 11);
+        gAutoInfo = s->info;
+        gAutoReady = true;
+        uint8_t data[NVT_POINT_DATA_LEN];
+        unsigned sinceRead = 0, pass = 0, published = 0;
+        unsigned wdt = 0;
+        for (;;) {
+            // The rows about every half second, whatever the reports do (the log copies them every 10 s).
+            if (++pass % 250 == 0) rows(*s);
+            native_touch_loop_step = 1;
+            // A report when the line rose; without an edge for 500 ms, one anyway, in case the latch missed one. On the tablet
+            // (2026-10-24) every finger report came with an edge, the lift included (676 edges, 671 reports in 5 strokes), and the
+            // reads without one mostly returned 0xff (a bad checksum); 50 ms read the chip 6385 times in 6 minutes for nothing.
+            if (!attention(*s)) {
+                if (++sinceRead < 250) {IOSleep(2); continue;}
+                ++s->idleReads;
+            } else {
+                ++s->edges;
+            }
+            sinceRead = 0;
+            native_touch_loop_step = 2;
+            if (nvt_read_points(&s->chip, data)) {fail(11, NVT_ERR_BUS); IOSleep(8); continue;}
+            ++s->reads;
+            for (unsigned q = 0; q < 24; ++q) s->last[q] = data[q];
+            native_touch_loop_step = 3;
+            int recovery = nvt_points_recovery(data);
+            if (recovery) {
+                ++s->recov;
+                // The stock driver downloads the firmware again after ten watchdog patterns in a row.
+                if (recovery == 2 && ++wdt >= 10) {
+                    wdt = 0;
+                    native_touch_loop_step = 4;
+                    if (!nvt_download_firmware(&s->chip, &fw)) {(void)nvt_start_reports(&s->chip, &s->info); armAttention(*s);}
+                }
+                continue;
+            }
+            wdt = 0;
+            if (!nvt_points_checksum_ok(data)) {++s->bad; continue;}
+            native_touch_valid = native_touch_valid + 1;
+            struct nvt_point pts[NVT_POINT_SLOTS];
+            unsigned n = nvt_parse_points(data, &s->info, pts, NVT_POINT_SLOTS);
+            native_touch_frames = native_touch_frames + 1;
+            native_touch_contacts = n;
+            if (n) {native_touch_last_x = pts[0].x; native_touch_last_y = pts[0].y;}
+            native_touch_loop_step = 5;
+            // An empty report only once after the last finger lifted: the reads without an edge return empty reports too.
+            if (n || published) publish(n, pts, s->info);
+            published = n;
+        }
+    } while (0);
+    rows(*s);
+}
 
-        if (gtx8ReadReg(*s, GTX8_REG_TOUCH_DATA, buf, 16u) != 0) {
+// Scripted strokes for runs nobody watches (pipa-touch bits 8 and up: their count), as UniXNU-tb128fu's. Once the GPU hand-off has
+// completed frames (the lock screen is up) and 30 s more have passed, a swipe up from the bottom edge unlocks to the home screen
+// (the user's own unlock swipes of 2026-10-24 ran from HID y 20200 of 20320 to about 15500 in 250 to 360 ms), and 10 s later
+// strokes alternately right to left and back across the middle of the panel turn its pages, each 300 ms long with 1.5 s between
+// them: one finger in slot 9, which the controller's reports of one finger do not use, in the firmware's units.
+extern "C" volatile uint64_t native_gop_gpu_completions __attribute__((weak_import));
+extern "C" volatile uint32_t native_touch_auto_done;
+volatile uint32_t native_touch_auto_done;
+static void autoTouchThread(void *arg, wait_result_t) {
+    const unsigned strokes = static_cast<unsigned>(reinterpret_cast<uintptr_t>(arg));
+    while (!gAutoReady || !&native_gop_gpu_completions || !native_gop_gpu_completions) IOSleep(1000);
+    IOSleep(30000);
+    const int w = gAutoInfo.abs_x_max, h = gAutoInfo.abs_y_max;
+    // From the panel's last rows, where NativeHidInput marks the contact as an edge one (SpringBoard's home gesture needs it).
+    for (int step = 0; step <= 25; ++step) {
+        const nvt_point p = {9, 1, static_cast<uint16_t>(w / 2), static_cast<uint16_t>(h - h / 300 - (h * 55 / 100) * step / 25), 8, 50};
+        publish(1, &p, gAutoInfo);
+        IOSleep(10);
+    }
+    publish(0, nullptr, gAutoInfo);
+    // With 5 s after the unlock some rounds' strokes alternated between the first page and the Today view instead of the first and
+    // second pages (frame buffer pictures, 2026-10-24), presumably because the first page turn (right to left) came too early: 10 s.
+    IOSleep(10000);
+    for (unsigned i = 0; i < strokes; ++i) {
+        const int from = (i & 1) ? w / 5 : w * 4 / 5, to = (i & 1) ? w * 4 / 5 : w / 5;
+        for (int step = 0; step <= 30; ++step) {
+            const nvt_point p = {9, 1, static_cast<uint16_t>(from + (to - from) * step / 30), static_cast<uint16_t>(h / 2), 8, 50};
+            publish(1, &p, gAutoInfo);
             IOSleep(10);
-            continue;
         }
-
-        if (!(buf[0] & 0x80u)) {
-            if (buf[0] == 0x01u) (void)gtx8WriteReg(*s, GTX8_REG_TOUCH_DATA, zero2, 2u);
-            continue;
-        }
-
-        ++s->readyFrames;
-        for (unsigned i = 0; i < 16; ++i) s->lastRaw[i] = buf[i];
-
-        const unsigned touchNum = buf[1] & 0x0fu;
-        const bool stylus = (buf[1] & 0x20u) != 0u;
-        if (touchNum > 10u) {
-            (void)gtx8WriteReg(*s, GTX8_REG_TOUCH_DATA, zero2, 2u);
-            continue;
-        }
-
-        const unsigned hdrLen = stylus ? 16u : 12u;
-        const unsigned totalLen = (touchNum >= 2u) ? (hdrLen + (touchNum - 1u) * 8u) : hdrLen;
-        if (totalLen > 16u) {
-            if (gtx8ReadReg(*s, static_cast<uint16_t>(GTX8_REG_TOUCH_DATA + 16u), buf + 16u, totalLen - 16u) != 0) {
-                (void)gtx8WriteReg(*s, GTX8_REG_TOUCH_DATA, zero2, 2u);
-                continue;
-            }
-        }
-        // Acknowledge immediately so GT7386 prepares the next frame
-        (void)gtx8WriteReg(*s, GTX8_REG_TOUCH_DATA, zero2, 2u);
-
-        if (touchNum > 0u) {
-            uint32_t sum = 0;
-            for (unsigned i = 1u; i < totalLen; ++i) sum += buf[i];
-            if ((sum & 0xffu) != 0u) {
-                ++s->badCsum;
-                continue;
-            }
-        }
-
-        ++s->validFrames;
-        TouchPoint pts[10];
-        unsigned active = 0;
-        if (!stylus) {
-            uint8_t rawIds[10];
-            int xs[10], ys[10], mappedSlots[10];
-            for (unsigned i = 0; i < touchNum && active < 10u; ++i) {
-                const uint8_t *f = &buf[2u + 8u * i];
-                const uint16_t rx  = static_cast<uint16_t>(f[1] | (static_cast<uint16_t>(f[2]) << 8));
-                const uint16_t ry  = static_cast<uint16_t>(f[3] | (static_cast<uint16_t>(f[4]) << 8));
-                const uint16_t rw  = static_cast<uint16_t>(f[5] | (static_cast<uint16_t>(f[6]) << 8));
-                if (rw == 0u) continue; // rw == 0 indicates lifted slot in GT7386; f[0] is an 8-bit rolling tracking ID (0..255)
-                rawIds[active] = f[0];
-                xs[active] = static_cast<int>(rx);
-                ys[active] = static_cast<int>(ry);
-                ++active;
-            }
-            tb_update_slots(s->slotRaw, active, rawIds, mappedSlots);
-            unsigned validActive = 0;
-            for (unsigned i = 0; i < active; ++i) {
-                if (mappedSlots[i] < 0) continue;
-                pts[validActive++] = { mappedSlots[i], xs[i], ys[i] };
-            }
-            active = validActive;
-        } else if (touchNum >= 1u) {
-            for (unsigned i = 0; i < 10u; ++i) s->slotRaw[i] = -1;
-            const uint8_t *p = &buf[touchNum * 8u - 6u];
-            const uint16_t rx = static_cast<uint16_t>(p[1] | (static_cast<uint16_t>(p[2]) << 8));
-            const uint16_t ry = static_cast<uint16_t>(p[3] | (static_cast<uint16_t>(p[4]) << 8));
-            const uint16_t rp = static_cast<uint16_t>(p[5] | (static_cast<uint16_t>(p[6]) << 8));
-            if (rp > 0u) {
-                pts[active++] = { 0, static_cast<int>(rx), static_cast<int>(ry) };
-            }
-        }
-
-        if (active > 0u || prevPublished > 0u) {
-            publishPoints(*s, active, pts);
-        }
-        prevPublished = active;
+        publish(0, nullptr, gAutoInfo);
+        native_touch_auto_done = i + 1;
+        IOSleep(1500);
     }
 }
 
-} // namespace
-
 extern "C" void native_touch_probe(void) {
-    unsigned on = 0;
-    if (!PE_parse_boot_argn("j716f-touch", &on, sizeof on) || on < 1u || native_touch_stage_req) return;
-    native_touch_stage_req = on;
+    unsigned value = 0;
+    if (!PE_parse_boot_argn("pipa-touch", &value, sizeof value) || (value & 0xff) < 1 || native_touch_stage_req) return;
+    unsigned stage = value & 0xff;
+    if (stage > 5) stage = 5;
+    native_touch_stage_req = stage;
     thread_t thread = nullptr;
-    if (kernel_thread_start(touchThread, nullptr, &thread) == KERN_SUCCESS) {
-        thread_deallocate(thread);
+    if (kernel_thread_start(touchThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+    else native_touch_error = -12;
+    if (stage == 5 && (value >> 8)) {
+        thread_t automatic = nullptr;
+        if (kernel_thread_start(autoTouchThread, reinterpret_cast<void *>(static_cast<uintptr_t>(value >> 8)), &automatic) == KERN_SUCCESS)
+            thread_deallocate(automatic);
     }
 }

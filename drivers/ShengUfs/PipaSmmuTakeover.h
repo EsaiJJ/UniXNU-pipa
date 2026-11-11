@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SM8250 APPS SMMU dual-stream bypass takeover for J716F UFS controller.
+// SM8250 APPS SMMU dual-stream bypass takeover for the pipa UFS controller.
 // Only the last, unused/disabled context bank is used for bypass.
 #pragma once
 #include <stdint.h>
 
-struct J716fSmmuPlan {
+struct PipaSmmuPlan {
   unsigned bank = 0, pages = 0, count = 0;
   unsigned slot[2] = {~0U, ~0U};
   bool reuse[2] = {};
   unsigned error = 0;
 };
-static constexpr uint16_t kJ716fUfsStreams[2] = {0x0e0, 0x4e0};
+static constexpr uint16_t kPipaUfsStreams[2] = {0x0e0, 0x4e0};
 
 template<class Read>
-static J716fSmmuPlan planJ716fSmmu(uint64_t dma, uint64_t bytes, Read read)
+static PipaSmmuPlan planPipaSmmu(uint64_t dma, uint64_t bytes, Read read)
 {
-  J716fSmmuPlan p;
+  PipaSmmuPlan p;
   uint32_t id0 = read(0x20), id1 = read(0x24), id2 = read(0x28);
   p.count = id0 & 255;
   p.pages = 1U << (((id1 >> 28) & 7) + 1);
@@ -40,7 +40,7 @@ static J716fSmmuPlan planJ716fSmmu(uint64_t dma, uint64_t bytes, Read read)
     bool ownBank = ((s2cr >> 16) & 3) == 0 && (s2cr & 255) == p.bank;
     bool owned = false;
     for (unsigned s = 0; s < 2; ++s) {
-      if (((smr ^ kJ716fUfsStreams[s]) & 0xffff & ~mask) != 0) continue;
+      if (((smr ^ kPipaUfsStreams[s]) & 0xffff & ~mask) != 0) continue;
       if (p.reuse[s] || mask || !ownBank) { p.error = 3; return p; }
       p.reuse[s] = true; p.slot[s] = i; owned = true;
     }
@@ -59,13 +59,13 @@ static J716fSmmuPlan planJ716fSmmu(uint64_t dma, uint64_t bytes, Read read)
 }
 
 template<class Read, class Write>
-static unsigned configureJ716fSmmu(const J716fSmmuPlan &p, Read read, Write write)
+static unsigned configurePipaSmmu(const PipaSmmuPlan &p, Read read, Write write)
 {
   if (p.error) return p.error;
   unsigned cb = (p.pages + p.bank) * 4096;
   for (unsigned s = 0; s < 2; ++s) {
     uint32_t smr = read(0x800 + 4 * p.slot[s]);
-    if (p.reuse[s] ? (smr != (0x80000000U | kJ716fUfsStreams[s]) ||
+    if (p.reuse[s] ? (smr != (0x80000000U | kPipaUfsStreams[s]) ||
          read(0xc00 + 4 * p.slot[s]) != p.bank) : (smr & 0x80000000U)) return 7;
   }
   if (read(cb) & 1) return 7;
@@ -80,8 +80,8 @@ static unsigned configureJ716fSmmu(const J716fSmmuPlan &p, Read read, Write writ
     if (read(0xc00 + 4 * p.slot[s]) != p.bank) return 10;
   }
   for (unsigned s = 0; s < 2; ++s) if (!p.reuse[s]) {
-    write(0x800 + 4 * p.slot[s], 0x80000000U | kJ716fUfsStreams[s]);
-    if (read(0x800 + 4 * p.slot[s]) != (0x80000000U | kJ716fUfsStreams[s]) ||
+    write(0x800 + 4 * p.slot[s], 0x80000000U | kPipaUfsStreams[s]);
+    if (read(0x800 + 4 * p.slot[s]) != (0x80000000U | kPipaUfsStreams[s]) ||
        read(0xc00 + 4 * p.slot[s]) != p.bank) return 11;
   }
   return 0;

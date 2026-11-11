@@ -2,9 +2,9 @@ schema_version = 2
 
 [soc]
 name = "sm8250"
-description = "Qualcomm SM8250/Kona board-local transition snapshot"
-source_repository = "board evidence: ZUI DTB0/DTBO8 and recovery FDT"
-source_revision = "j716f-hardware-evidence-v1"
+description = "Qualcomm SM8250/Kona board-local transition snapshot (Xiaomi Pad 6 / pipa)"
+source_repository = "board evidence: Xiaomi Pad 6 firmware DT, Android /memory, and the measured pipa UEFI report"
+source_revision = "pipa-hardware-evidence-v1"
 
 # This is deliberately local until a reviewed UniXNU-sm8250-common repository
 # is available. Shared platform code and a public fixed commit must be added

@@ -1,5 +1,6 @@
-# Standard J716F (SM8250) defconfig for iPadOS 17.7.11 (21H461)
-# Mainline configuration: ArmDTPlatform + ArmCpu + SoftwareAES + RamBlock + ShengUfs + Display + BootProgress + PMGR
+# Xiaomi Pad 6 (pipa, SM8250-AC) defconfig for iPadOS 17.7.11 (21H461).
+# Mainline configuration: ArmDTPlatform + ArmCpu + SoftwareAES + RamBlock + ShengUfs + VerifiedRoot + Display + Adreno 650 +
+# BootProgress + PMGR. CONFIG_XNU_<NAME> becomes XNU_<NAME> for the kernel build.
 CONFIG_XNU_BUILD_ARCHIVES=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_SOURCE_PTHREAD=y
@@ -22,10 +23,18 @@ CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
 CONFIG_XNU_BOOT_PROGRESS=y
 CONFIG_XNU_BOOT_PROGRESS_STANDALONE=y
 CONFIG_XNU_NATIVE_RAM_BLOCK=y
+# The Verified variant of the virtio block device: its root authorization query is what the owner chain calls. No virtio
+# device exists on pipa, so its own block transport never configures.
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/virtio-mmio-block-verified/libVirtioMmioBlock.a"
 CONFIG_XNU_SHENG_PMGR=y
+# Owner root chain: audit/trust the verified root, mount the SystemOS cryptex as the cache carrier, publish the boot
+# manifest, then mount the persistent Data volume on UFS.
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/verified-root-key/libVerifiedRootKey.a"
 CONFIG_XNU_OWNER_DATA_MOUNT=y
 CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="8846FE78-2910-4297-AF97-D59BB6F8FC16"
-CONFIG_XNU_OWNER_DATA_VOLUME_UUID="6DCCF70A-6FD6-403E-ACED-95313CD7CBB8"
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="73F1FA24-4189-446D-96D4-FB6324EBE955"
 CONFIG_XNU_OWNER_ROOT_AUDIT=y
 CONFIG_XNU_OWNER_ROOT_TRUST=y
 CONFIG_XNU_OWNER_CACHE_MOUNT=y

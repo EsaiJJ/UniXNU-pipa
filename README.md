@@ -1,100 +1,136 @@
-# UniXNU-j716f
+# UniXNU-pipa
 
-Lenovo Xiaoxin Pad Pro 2021 (`TB-J716F`, SM8250-AC / Kona) device support for UniXNU (`iPadOS 17.7.11` Build `21H461`).
+Xiaomi Pad 6 (`pipa`, SM8250-AC / Kona) device support for UniXNU (`iPadOS 17.7.11`, build `21H461`).
 
-Firmware repository: [uefi-j716f](https://github.com/Denis0x00/uefi-j716f)  
+Firmware repository: [uefi-pipa](https://github.com/xVanTuring/uefi-pipa) (branch `pipa`)  
+Reference port: [xVanTuring/UniXNU-pipa](https://github.com/xVanTuring/UniXNU-pipa)  
 Specification: [UniXNU Porting Guide](https://unixnu.com/zh/porting/)
+
+This fork starts from the Lenovo TB-J716F board (same SM8250-AC SoC) and replaces its board-specific parts
+with the measured Xiaomi Pad 6 values. The upstream pipa port demonstrated touch, buttons, GPU and Metal on a
+16 GB unit; this fork's pipa build has **not** been run on hardware, so every "ported" item below is a build
+and source claim until someone boots it.
 
 ## Device Specifications
 
-- **Device**: Lenovo Xiaoxin Pad Pro 2021 (`TB-J716F` / `j716f`)
+- **Device**: Xiaomi Pad 6 (`pipa`)
 - **SoC**: Qualcomm SM8250-AC (Snapdragon 870)
-- **CPU**: 8-core Kryo 585 (1x Cortex-A77 @ 3.2 GHz + 3x Cortex-A77 @ 2.42 GHz + 4x Cortex-A55 @ 1.8 GHz)
-- **GPU**: Qualcomm Adreno 650 (`06050002`, 670 MHz top OPP, GMU + SQE + TZ PAS 13 Zap shader)
-- **Display**: 11.5" 2560x1600 90 Hz OLED (`0x9c000000` UEFI GOP scanout, scale 2x)
-- **Touch**: Goodix `GT7386` 10-point multi-touch over QUPv3 SE11 I2C (`0x00990000`, addr `0x5d`)
-- **DRAM**: 6 GiB LPDDR4X (`0x80000000` - `0x200000000`)
-- **Storage**: UFS 3.1 host controller at `0x01D84000` (APFS OS + SystemOS volumes)
-- **Target OS**: iPadOS 17.7.11 (Build `21H461`, device class `j120ap`)
+- **CPU**: 8-core Kryo 585 (1x Cortex-A77 prime + 3x Cortex-A77 + 4x Cortex-A55), MPIDR `0x000..0x700`
+- **GPU**: Qualcomm Adreno 650 (`0x06050002`)
+- **Display**: 11" 1800x2880 panel, UEFI GOP scanout at `0x9c000000`, UI scale 2
+- **Touch**: Novatek `NT36532` over QUPv3_0 SE4 GENI SPI (`0x990000`, wrapper `0x9c0000`, 9.6 MHz, IRQ GPIO39)
+- **Keys**: PM8150 PON `kpdpwr` / `resin` (power, volume down), PM8150 GPIO6 active-low (volume up)
+- **DRAM**: measured 16 GB unit, banks `0x80000000+0x37700000`, `0xc0000000+0x1c0000000`, `0x800000000+0x200000000`
+- **Storage**: UFS 3.1 host controller at `0x01d84000` (APFS OS + SystemOS volumes on `userdata`)
+- **Battery**: PM8150B fuel gauge + SMB5 charger, 8840 mAh design capacity
+- **Wi-Fi / Bluetooth**: QCA6390 (PCIe0 + QUPv3_0 SE6 GENI UART), carried over and unverified
+- **Target OS**: iPadOS 17.7.11 (build `21H461`, device class `j120ap`)
 
 ## Hardware Support Status
 
 | Subsystem | Status | Notes |
 | --- | --- | --- |
-| Boot & XNU Kernel | Device-verified | UEFI (`uefi-j716f`) -> DarwinBoot -> XNU ARM64 VM + IOKit -> iPadOS 17.7.11 desktop |
-| CPU & SMP | Device-verified | All 8 Kryo 585 cores online (`sheng-smp=1`) + AMP big.LITTLE E/P edge scheduler (`armcpu-edge=1`) + dynamic 3-cluster EPSS `cpufreq` (`pipa-cpufreq=4`, touch boost + `300 / 691 / 844 MHz` idle floors) |
-| GPU Acceleration | Device-verified | Native `Adreno650` KMD (`pipa-gpu=12`) + GMU HFI dynamic DCVS (`pipa-gpu-dcvs=1`, `305..670 MHz`) + `NativeAdrenoMetal` / Turnip (`sysmem,nocb`, `MESA_SHADER_CACHE_DIR`, `54 us/draw`) |
-| Display & Brightness | Device-verified | 2560x1600 BGRX8888 GOP framebuffer + GPU hardware scanout blitter (`sheng-fb-gpu=1`) + `AppleARMBacklight` (`sheng-backlight=1`) & `copy_rows` compute brightness slider + lock/wake power re-arm |
-| Touch & Buttons | Device-verified | Goodix `GT7386` multi-touch (`j716f-touch=1`, rolling `0..255` tracking-ID slot mapper) + PM8150/PM8150B PON keys (`pipa-buttons=1`) |
-| Storage & System Apps | Device-verified | SM8250 native UFS (`ShengUfs`) mounting iPadOS 17.7.11 APFS container + persistent Data volume + `owner-staged-apps=1` built-in system apps + `appsync=1` dynamic user-code trust & IPA installer |
-| Battery Gauge | Device-verified | PM8150B FG / SMB5 SPMI battery gauge (`NativeBattery`, `IOPMPowerSource` SoC, open-circuit voltage fallback, current, charging state) |
-| USB Diagnostics & Native Apple USB | Device-verified | DWC3 USB0 (`0x0A600000`) CDC-ACM console (`1209:0001`, `GSC1` screen capture, `reboot.fastboot`) + runtime switch (`usb.xdci` / `usb.xdci.30`) to native `QcomDwc3` / `AppleUSBXDCI` (`05ac:12ab`, `AppleUSBDeviceMux`, `lockdownd` pairing) |
-| Wi-Fi & Bluetooth | Device-verified | QCA6390 PCIe0 + MHI AMSS Mission Mode (`Ath12kWifi`, `sheng-wifi=4`, `en0` + `wifid` + `unixnu-wpa_supplicant`) and QUPv3_0 SE6 GENI UART @ 3.2 Mbps (`QcaBluetooth`, `sheng-bluetooth=1`, `BlueTool` + `bluetoothd` + live BLE advertising RX) |
-| Audio | Planned | WCD938x / WSA881x ADSP Q6AFE audio planned |
+| Board configuration | Ported | `board.toml` (schema 2), `configs/pipa_defconfig`, `dts/pipa.dts`, pipa DRAM/userdata/boot-image values |
+| Boot & XNU kernel | Ported, not booted here | `uefi-pipa` -> DarwinBoot -> XNU ARM64 + IOKit; static checks and archive builds only |
+| CPU & SMP | Ported, not booted here | 8 cores, GICv3, PSCI SMC, 19.2 MHz timer, `pipa-cpufreq=1` |
+| Storage | Ported, not booted here | `ShengUfs` with the SM8250 UFS host and the pipa APFS `userdata` window |
+| GPU | Ported, not booted here | Adreno 650 KMD (`pipa-gpu=12`), GMU/SQE/zap firmware, Turnip `nocb` defaults from the upstream pipa port |
+| Display | Partial | GOP framebuffer at `0x9c000000`, scale 2, GPU scanout copy; **no backlight driver yet** |
+| Touch & buttons | Ported, not booted here | Novatek `NT36532` (`pipa-touch=5`, `NvtProtocol` + `GeniSpi`) and PM8150 PON keys (`pipa-buttons=1`) |
+| Battery gauge | Ported, not booted here | PM8150B FG / SMB5 with the 8840 mAh pipa profile |
+| Wi-Fi & Bluetooth | Carried over, default-off | QCA6390 code is present but its boot arguments are not set; pin/rail assumptions are unverified on pipa |
+| USB diagnostics & native USB | Carried over, default-off | DWC3 CDC-ACM (`pipa-usb=1`) and `AppleUSBXDCI` handoff, unverified on pipa |
+| Backlight / brightness | Missing | KTZ8866 over I2C11 is not ported; `sheng-backlight` must stay unset |
+| Audio | Planned | No ADSP/WCD938x path yet |
 
 ## Repository Layout
 
 ```text
-UniXNU-j716f/
+UniXNU-pipa/
 ├── board.toml                           # Format 2 board specification
-├── porting.toml                         # Porting progress and hardware verification record
+├── porting.toml                         # Porting record (implementation status, not device verification)
 ├── feeds.toml                           # Shared dependencies and upstream commits
-├── proprietary-files.txt                # Vendor firmware SHA-256 manifest (ZUI 15.0.485)
+├── proprietary-files.txt                # Firmware manifest; pipa-only digests still UNMEASURED
 ├── configs/
-│   └── j716f_defconfig                  # Kernel build configuration
+│   └── pipa_defconfig                   # Kernel build configuration
 ├── dts/
-│   └── j716f.dts                        # Device Tree Source (Format 2)
+│   └── pipa.dts                         # Fallback board tree (uefi-pipa's pipa.dtb is preferred)
 ├── drivers/
-│   ├── Adreno650/                       # SM8250 Adreno 650 kernel driver + staged AGXAccelerator
-│   ├── AdrenoMetal/                     # Metal-to-Turnip userspace bridge & plugin sources
+│   ├── Adreno650/                       # SM8250 Adreno 650 kernel driver
+│   ├── AdrenoMetal/                     # Metal-to-Turnip userspace bridge
 │   ├── ArmCpu/                          # ARM64 SMP & interrupt controller driver
-│   ├── GopFramebuffer/                  # Display framebuffer & GPU scanout hand-off driver
-│   ├── ShengHidInput/                   # Multi-touch & physical button HID injection driver
+│   ├── GopFramebuffer/                  # Display framebuffer & scanout hand-off
+│   ├── QcomGeniSpi/                     # GENI SPI transport for the touch controller
+│   ├── ShengHidInput/                   # Multi-touch & button HID injection
+│   ├── ShengNovatekTouch/               # NT36532 protocol and point-report core
 │   └── ShengUfs/                        # SM8250 UFS 3.1 host controller driver
 ├── kits/
 │   └── ArmSmmu4K/                       # Qualcomm ARM SMMU v2 4K context bank kit
-├── package/                             # Board probes (GPU, GMU, Touch, Battery, Buttons, USB CDC-ACM)
+├── package/                             # Board probes (GPU, touch, buttons, battery, USB, ramoops)
 ├── patches/
-│   └── xnu/                             # Upstream XNU kernel patch series
+│   └── xnu/                             # Board-local XNU patch series
 └── scripts/
-    ├── build-adreno650.py               # Archive builder for libAdreno650.a
-    ├── build-gop-legacy-display.py      # Archive builder for GopFramebuffer + GPU presenter
-    ├── build-j716f-gpu-addon.py         # GPU userspace bundle & firmware addon packager
-    ├── check-j716f.py                   # Platform preflight validator & DTB stager
-    └── package.sh                       # Standard UniXNU release packaging entrypoint
+    ├── build-adreno650.py               # libAdreno650.a
+    ├── build-pipa-gpu-addon.py          # NativeAdrenoMetal bundle, trust bundle, NGPUADD2 addon
+    ├── build-gop-legacy-display.py      # libNativeLegacyDisplay.late.a (display, touch, USB, battery)
+    ├── check-pipa.py                    # Firmware preflight and boot DTB staging
+    └── package.sh                       # UniXNU release wrapper (do not edit)
 ```
 
-## Building & Verification
+## Building
 
-In the root of the UniXNU tree:
+The firmware comes from `uefi-pipa`; place both checkouts next to a `UniXNU` checkout:
 
 ```sh
-# 1. Select board defconfig
-./unixnu defconfig j716f_defconfig -D ../UniXNU-j716f
+git clone -b pipa https://github.com/xVanTuring/uefi-pipa.git
+git clone https://github.com/UniXNU/UniXNU.git
 
-# 2. Inspect dependency status
-./unixnu status --json -D ../UniXNU-j716f
-
-# 3. Verify porting record
-python3 scripts/porting-record.py check --device ../UniXNU-j716f
-
-# 4. Standard release build
-./scripts/package.sh
+cd UniXNU
+./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
+python3 ../UniXNU-pipa/scripts/check-pipa.py
+bash ../UniXNU-pipa/scripts/package.sh --no-deps --uefi ../uefi-pipa
 ```
 
-## Flashing & USB Diagnostics
+`check-pipa.py` stages `build/pipa/pipa.dtb`: it copies `uefi-pipa/Resources/DTBs/pipa.dtb` when that checkout
+is present and otherwise compiles `dts/pipa.dts`. It also checks the pipa platform files, the UEFI memory
+descriptors and the firmware inputs, and records `hardware_boot_demonstrated: false`.
 
-Always flash **Slot B (`boot_b`)** via `fastbootd` so Slot A remains untouched:
+The archive builders need a few firmware files outside Git (paths are overridable through `PIPA_*` variables):
 
-```sh
-fastboot reboot fastboot
-fastboot set_active b
-fastboot flash boot_b boot.img
-fastboot reboot
-```
+- `.cache/firmware/gpu/a650_gmu.bin`, `a650_zap.elf` - the vendor `/firmware` partition
+- `.cache/firmware/linux-firmware/a650_sqe.fw` - linux-firmware `qcom/a650_sqe.fw`
+- `.cache/firmware/touch/novatek_nt36532_m82_fw_tm.bin` - the stock kernel's built-in `_tm` image
 
-Once booted with `j716f-usb=1`, the tablet enumerates as a USB CDC-ACM serial port (`1209:0001`, serial `J716FDBG01`) supporting live telemetry (`status`, `display`, `gpu.status`, `battery.status`), `GSC1` framebuffer capture (`screen.snapshot`), warm reboot directly back to Fastboot (`reboot.fastboot`), and runtime handoff (`usb.xdci.30` or persistent `usb.xdci`) to the native `QcomDwc3` / `AppleUSBXDCI` stack (`05ac:12ab`, `AppleUSBDeviceMux` + `lockdownd` host pairing).
+`proprietary-files.txt` lists the remaining Wi-Fi/Bluetooth images and marks the pipa-only digests as
+`UNMEASURED` until they are extracted and hashed.
 
-## License
+## Boot Arguments
 
-BSD-2-Clause-Patent, see [LICENSE](LICENSE).
+`board.toml` sets the pipa bring-up set:
+
+- `pipa-touch=5` - Novatek report loop on the attention line
+- `pipa-buttons=1` - PM8150 PON keys
+- `pipa-cpufreq=1`, `pipa-gpu=12`, `sheng-gpu-addon=1`, `sheng-fb-gpu=1`
+- `native-ufs-root=1`, `sheng-data-persist=2`, `sheng-pmgr=2`
+- `pipa-restart-after=240`, `pipa-panic-restart-after=10`, `pipa-restart-crashes=3`
+
+Deliberately **not** set until each is validated on pipa:
+
+- `sheng-backlight=1` - the KTZ8866 controller is not implemented
+- `sheng-wifi=4`, `sheng-bluetooth=1` - QCA6390 rails/pins need hardware confirmation
+- `pipa-usb=1` - USB CDC-ACM and the native `AppleUSBXDCI` handoff are unverified here
+
+## Diagnostics
+
+With `pipa-usb=1` the tablet enumerates as a CDC-ACM port (`1209:0001`) and accepts `status`, `display`,
+`gpu.status`, `battery.status`, `screen.snapshot` and `reboot.fastboot`. The ramoops console is at
+`0xb0000000`; `package/linux-log` and `scripts/read-pipa-log.py` read it back.
+
+## Known Gaps
+
+- No hardware run of this fork. The reference port's results do not transfer automatically to a different
+  UEFI build, firmware manifest or `board.toml`.
+- The KTZ8866 backlight, QCA6390 Wi-Fi/Bluetooth, and native USB paths are absent or default-off.
+- The 16 GB memory map is the measured unit's; a different capacity needs its own `/memory` banks.
+- `proprietary-files.txt` still has `UNMEASURED` pipa digests and the Adreno 650 digests were recorded on a
+  TB-J716F vendor partition.

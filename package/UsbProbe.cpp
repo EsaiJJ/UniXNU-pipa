@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TB-J716F (SM8250) board entry for the QcomDwc3 AppleUSBXDCI driver (iPadOS 17.7.11 21H461).
+// Xiaomi Pad 6 (SM8250) board entry for the QcomDwc3 AppleUSBXDCI driver (iPadOS 17.7.11 21H461).
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -58,9 +58,9 @@ extern "C" void sheng_usb_probe(void) {
     unsigned enabled = 0;
     if (!PE_parse_boot_argn("sheng-usb", &enabled, sizeof(enabled)) || !enabled) return;
     unsigned cdc = 1;
-    (void)PE_parse_boot_argn("j716f-usb", &cdc, sizeof(cdc));
+    (void)PE_parse_boot_argn("pipa-usb", &cdc, sizeof(cdc));
     if (cdc) {
-        // When j716f-usb=1 is active, UsbDebugCdc owns 0x0a600000 at boot and can hand off via usb.xdci / usb.xdci.30
+        // When pipa-usb=1 is active, UsbDebugCdc owns 0x0a600000 at boot and can hand off via usb.xdci / usb.xdci.30
         return;
     }
     thread_t thread = nullptr;

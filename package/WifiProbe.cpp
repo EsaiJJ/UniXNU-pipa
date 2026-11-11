@@ -1692,7 +1692,7 @@ void bringUp(Window &gcc, Window &tlmm) {
     f[kParfAxiHalt / 4] |= 1u << 31;
     native_wifi_stats[0] = 13;
 
-    // SM8250 QMP Gen3x1 PHY power-on sequence (sm8250-lenovo-tb-j716f.dtb)
+    // SM8250 QMP Gen3x1 PHY power-on sequence (pipa.dtb)
     Window phy = {};
     if (!mapWindow(phy, kPhy, 0x1000)) {release(dbi); release(parf); native_wifi_stats[0] = -14; return;}
     volatile uint32_t *p = phy.va;

@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// Board-level hardware description for the Xiaomi Pad 6 (pipa, SM8250-AC).
+//
+// This is the fallback tree of scripts/check-pipa.py. When a uefi-pipa checkout is present its
+// Resources/DTBs/pipa.dtb is appended to the boot image instead, and this file is not compiled.
+/dts-v1/;
+/include/ "sm8250.dtsi"
+
+/ {
+    model = "Xiaomi Pad 6";
+    compatible = "xiaomi,pipa", "qcom,kona";
+
+    // Export the radios under /soc (/arm-io in ADT) before launchd evaluates wifid's device-tree condition.
+    // WifiProbe owns PCIe0 resources and fills local-mac-address at runtime; BluetoothProbe drives the BT pins.
+    soc {
+        wlan {
+            compatible = "qcom,qca6390";
+            unixnu,adt-name = "wlan";
+            status = "okay";
+        };
+
+        bluetooth {
+            device_type = "bluetooth";
+            compatible = "qcom,qca6390-bt";
+            unixnu,adt-name = "bluetooth";
+            transport-encoding = <1>;
+            transport-speed = <3200000>;
+            status = "okay";
+        };
+    };
+
+    // The stock kernel reserves 4 MiB at 0xB0000000 for ramoops (console then pmsg, no ECC). BootRamoops.c
+    // maps the first 512 KiB as its console zone; the firmware's RamoopsLogLib writes the same region.
+    // Do not export the whole reservation as an arm-io device/MMIO alias.
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+        boot-log@b0000000 {
+            reg = <0 0xb0000000 0 0x400000>;
+            no-map;
+        };
+    };
+
+    // The measured 16 GB unit. Android's /memory has these three banks; the added 8 GiB is a bank of its own at
+    // 32 GiB. XNU takes dram-base/dram-size as one range, so board.toml spans base to the end of the last bank.
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x0 0x80000000 0x0 0x37700000>;
+        status = "okay";
+    };
+
+    memory@c0000000 {
+        device_type = "memory";
+        reg = <0x0 0xc0000000 0x1 0xc0000000>;
+        status = "okay";
+    };
+
+    memory@800000000 {
+        device_type = "memory";
+        reg = <0x8 0x00000000 0x2 0x00000000>;
+        status = "okay";
+    };
+};

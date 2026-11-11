@@ -5,7 +5,7 @@ import subprocess
 
 ROOT = Path('.').resolve()
 def find_src(name):
-    for p in [ROOT / f'kits/j716f/{name}', ROOT / f'package/{name}', Path(f'/home/test/tb-j716f-unixnu/sources/UniXNU-j716f/package/{name}')]:
+    for p in [ROOT / f'kits/pipa/{name}', ROOT / f'package/{name}']:
         if p.exists():
             return p
     raise SystemExit(f"Missing {name}")

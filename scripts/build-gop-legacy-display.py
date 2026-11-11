@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build NativeLegacyDisplay, NativeGOPPresenter, AppleKeyStoreState, ShengHidInput, and Buttons for J716F."""
+"""Build NativeLegacyDisplay, NativeGOPPresenter, AppleKeyStoreState, ShengHidInput, buttons, touch and GPU probes for pipa."""
 import hashlib
 import json
 import os
@@ -13,7 +13,7 @@ ROOT = Path('.').resolve()
 OUT = ROOT / 'build/native-legacy-display'
 OUT.mkdir(parents=True, exist_ok=True)
 
-for p in [ROOT / 'kits/XnuPrelink', Path('/home/test/tb-j716f-unixnu/sources/UniXNU/kits/XnuPrelink')]:
+for p in [ROOT / 'kits/XnuPrelink', ]:
     if p.exists():
         sys.path.insert(0, str(p))
         break
@@ -59,7 +59,7 @@ require(board_kernel.exists(), f"Missing board kernel {board_kernel}")
 # Ensure prelink candidate and audit inputs exist and match current kernel
 candidate_dir = ROOT / 'build/xnu-prelink'
 candidate_dir.mkdir(parents=True, exist_ok=True)
-candidate = candidate_dir / 'native-owner-ufs-cpu-desktop-j716f-candidate.macho'
+candidate = candidate_dir / 'native-owner-ufs-cpu-desktop-pipa-candidate.macho'
 shutil.copyfile(board_kernel, candidate)
 shutil.copyfile(board_kernel.with_suffix('.json'), candidate.with_suffix('.json'))
 
@@ -271,21 +271,20 @@ pkg_repo = next(
     (
         p for p in (
             ([Path(os.environ['UNIXNU_DEVICE'])] if os.environ.get('UNIXNU_DEVICE') else [])
-            + [Path(__file__).resolve().parents[1], Path('/home/test/tb-j716f-unixnu/sources/UniXNU-j716f')]
+            + [Path(__file__).resolve().parents[1]]
         )
         if (p / 'board.toml').is_file()
     ),
     kit_dir.parent,
 )
 pkg_fallback = pkg_repo / 'package' if (pkg_repo / 'package').exists() else kit_dir
-unixnu_repo = next((p for p in [ROOT, Path('/home/test/tb-j716f-unixnu/sources/UniXNU')] if (p / 'kits/AdrenoPM4').exists()), ROOT)
+unixnu_repo = next((p for p in [ROOT] if (p / 'kits/AdrenoPM4').exists()), ROOT)
 
 for extra_name in (
     'TouchBoard.h', 'TouchProbe.cpp', 'QcomRpmh.h', 'QcomRpmh.c', 'SmmuBypass.h',
     'UsbDebugCdc.h', 'UsbDebugWire.h', 'UsbDebugCommands.h', 'UsbDebugHw.h', 'UsbDebugCdc.cpp',
     'QcomDwc3.cpp', 'UsbProbe.cpp',
     'GpuPowerBoard.h', 'A650Gmu.h', 'A650Gmu.c', 'GpuProbe.cpp', 'MdssProbe.cpp',
-    'AppleARMBacklight.cpp', 'BacklightProbe.cpp',
     'NativeBatteryBoard.h', 'NativeBattery.cpp',
     'BootResetCore.h', 'FatVolume.h', 'FatVolume.c', 'MhiBoot.h', 'MhiBoot.c',
     'WcnPower.h', 'WifiPcieTables.h', 'WifiFirmware.h', 'WifiFirmware.c', 'WifiProbe.cpp', 'WifiNet.cpp',
@@ -298,7 +297,8 @@ for extra_name in (
 
 touch_probe_source = kit_dir / 'TouchProbe.cpp'
 touch_probe_obj = OUT / 'TouchProbe.o'
-run([str(touch_probe_source) if str(arg) == str(source) else str(touch_probe_obj) if str(arg) == str(OUT / 'LegacyDisplayProbe.o') else arg for arg in cmd] + ['-I', str(kit_dir)], cwd=r['directory'])
+run([str(touch_probe_source) if str(arg) == str(source) else str(touch_probe_obj) if str(arg) == str(OUT / 'LegacyDisplayProbe.o') else arg for arg in cmd] +
+    ['-I', str(kit_dir), '-I', str(ROOT / 'drivers/QcomGeniSpi'), '-I', str(ROOT / 'drivers/ShengNovatekTouch')], cwd=r['directory'])
 
 usb_debug_source = kit_dir / 'UsbDebugCdc.cpp'
 usb_debug_obj = OUT / 'UsbDebugCdc.o'
@@ -405,16 +405,8 @@ run([str(battery_source) if str(arg) == str(source) else str(battery_obj) if str
 run(['llvm-objcopy', '--remove-section=__DATA,__mod_init_func', battery_obj, battery_late])
 require(macho_globalize_symbol(battery_late, '__GLOBAL__sub_I_NativeBattery.cpp'), 'Globalized NativeBattery initializer')
 
-backlight_probe_source = kit_dir / 'BacklightProbe.cpp'
-backlight_probe_obj = OUT / 'BacklightProbe.o'
-run([str(backlight_probe_source) if str(arg) == str(source) else str(backlight_probe_obj) if str(arg) == str(OUT / 'LegacyDisplayProbe.o') else arg for arg in cmd] + ['-I', str(kit_dir)], cwd=r['directory'])
-
-backlight_class_source = kit_dir / 'AppleARMBacklight.cpp'
-backlight_class_obj = OUT / 'AppleARMBacklight.o'
-backlight_class_late = OUT / 'AppleARMBacklight.late.o'
-run([str(backlight_class_source) if str(arg) == str(source) else str(backlight_class_obj) if str(arg) == str(OUT / 'LegacyDisplayProbe.o') else arg for arg in cmd] + ['-I', str(kit_dir)], cwd=r['directory'])
-run(['llvm-objcopy', '--remove-section=__DATA,__mod_init_func', backlight_class_obj, backlight_class_late])
-require(macho_globalize_symbol(backlight_class_late, '__GLOBAL__sub_I_AppleARMBacklight.cpp'), 'Globalized AppleARMBacklight initializer')
+# The KTZ8866 backlight controller of the Xiaomi Pad 6 is not ported yet, so the TB-J716F RM692E6 backlight sources
+# (AppleARMBacklight.cpp, BacklightProbe.cpp) are neither copied nor compiled and sheng-backlight stays unset.
 
 nativewifi = Path(os.environ.get('ATH12K_WIFI_DIR') or os.environ.get('NATIVE_WIFI_DIR') or (unixnu_repo / 'drivers/Ath12kWifi'))
 require((nativewifi / 'include/nw_abi.h').exists(), f'Missing Ath12kWifi module directory at {nativewifi}')
@@ -483,6 +475,22 @@ zap_c.write_text(
     f'const uint32_t native_gpu_zap_firmware_size = {len(zap_blob)};\n'
 )
 
+# The Novatek NT36532 firmware (novatek_nt36532_m82_fw_tm.bin of the tablet's stock kernel, its built-in firmware table:
+# the panel is the "36" one, whose maker 0x36 the DT pairs with the _tm image). Kept outside Git in
+# .cache/firmware/touch; PIPA_TOUCH_FIRMWARE overrides it. TouchProbe.cpp host-downloads this at stage 4.
+touch_firmware = find_fw('PIPA_TOUCH_FIRMWARE', ('.cache/firmware/touch/novatek_nt36532_m82_fw_tm.bin',
+                                                 'firmware/touch/novatek_nt36532_m82_fw_tm.bin'))
+require(touch_firmware.is_file(), f'Missing touch firmware {touch_firmware}')
+touch_blob = touch_firmware.read_bytes()
+require(len(touch_blob) > 4096 and (touch_blob[-4096] + touch_blob[-4095]) & 0xff == 0xff,
+        f'{touch_firmware} fails the version check of the vendor driver')
+touch_fw_c = OUT / 'NovatekFirmware.c'
+touch_fw_c.write_text(
+    f'// {touch_firmware.name}, sha256 {hashlib.sha256(touch_blob).hexdigest()}\n#include <stdint.h>\n'
+    'const uint8_t native_touch_firmware[] __attribute__((aligned(16))) = {' + ','.join(map(str, touch_blob)) + '};\n'
+    f'const uint32_t native_touch_firmware_size = {len(touch_blob)};\n'
+)
+
 c_record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json').read_text().strip().rstrip(','))
 buttons_source = next(ROOT.glob('kits/*/Buttons.c'))
 buttons_obj = OUT / 'Buttons.o'
@@ -504,8 +512,9 @@ while j < len(c_args):
     j += 1
 run(c_out + ['-Wall', '-Wextra', '-Werror', '-I', str(buttons_source.parent)], cwd=c_record['directory'])
 
-def compile_c_obj(src_c: Path, dst_o: Path):
-    run([str(src_c) if str(arg) == str(buttons_source) else str(dst_o) if str(arg) == str(buttons_obj) else arg for arg in c_out] + ['-Wall', '-Wextra', '-Werror', '-I', str(kit_dir)], cwd=c_record['directory'])
+def compile_c_obj(src_c: Path, dst_o: Path, extra_includes: tuple = ()):
+    run([str(src_c) if str(arg) == str(buttons_source) else str(dst_o) if str(arg) == str(buttons_obj) else arg for arg in c_out] +
+        ['-Wall', '-Wextra', '-Werror', '-I', str(kit_dir), *extra_includes], cwd=c_record['directory'])
 
 rpmh_source = kit_dir / 'QcomRpmh.c'
 rpmh_obj = OUT / 'QcomRpmh.o'
@@ -522,6 +531,20 @@ compile_c_obj(mhi_source, mhi_obj)
 geni_uart_source = sm8250_platform / 'Sm8250GeniUart.c'
 geni_uart_obj = OUT / 'Sm8250GeniUart.o'
 run([str(geni_uart_source) if str(arg) == str(buttons_source) else str(geni_uart_obj) if str(arg) == str(buttons_obj) else arg for arg in c_out] + ['-Wall', '-Wextra', '-Werror', '-I', str(sm8250_platform)], cwd=c_record['directory'])
+
+# The pipa touch transport and protocol: the generic GENI SPI master (drivers/QcomGeniSpi) and the Novatek NT36532
+# host-download/point-report protocol (drivers/ShengNovatekTouch, the pipa branch), plus the firmware object generated
+# above. TouchProbe.cpp drives them from the board's clocks and pins.
+geni_spi_source = ROOT / 'drivers/QcomGeniSpi/GeniSpi.c'
+geni_spi_obj = OUT / 'GeniSpi.o'
+compile_c_obj(geni_spi_source, geni_spi_obj, ('-I', str(ROOT / 'drivers/QcomGeniSpi')))
+
+nvt_source = ROOT / 'drivers/ShengNovatekTouch/NvtProtocol.c'
+nvt_obj = OUT / 'NvtProtocol.o'
+compile_c_obj(nvt_source, nvt_obj, ('-I', str(ROOT / 'drivers/ShengNovatekTouch')))
+
+touch_fw_obj = OUT / 'NovatekFirmware.o'
+compile_c_obj(touch_fw_c, touch_fw_obj)
 
 bsd_record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/kern_exec.o.json').read_text().strip().rstrip(','))
 def compile_bsd_c_obj(src_c: Path, dst_o: Path):
@@ -599,14 +622,15 @@ run([
     gpu_obj,
     mdss_obj,
     battery_late,
-    backlight_probe_obj,
-    backlight_class_late,
     wifi_obj,
     wifinet_late,
     wifi_fw_obj,
     bt_obj,
     bt_fw_obj,
     geni_uart_obj,
+    geni_spi_obj,
+    nvt_obj,
+    touch_fw_obj,
     fat_obj,
     mhi_obj,
     rpmh_obj,
@@ -642,13 +666,16 @@ sources = [
     kit_dir / 'QcomRpmh.h',
     rpmh_source,
     kit_dir / 'SmmuBypass.h',
+    ROOT / 'drivers/QcomGeniSpi/GeniSpi.c',
+    ROOT / 'drivers/QcomGeniSpi/GeniSpi.h',
+    ROOT / 'drivers/ShengNovatekTouch/NvtProtocol.c',
+    ROOT / 'drivers/ShengNovatekTouch/NvtProtocol.h',
+    touch_firmware,
     gpu_source,
     kit_dir / 'GpuPowerBoard.h',
     kit_dir / 'A650Gmu.h',
     mdss_source,
     battery_source,
-    backlight_probe_source,
-    backlight_class_source,
     kit_dir / 'NativeBatteryBoard.h',
     buttons_source,
     buttons_source.parent / 'ButtonsCore.h',

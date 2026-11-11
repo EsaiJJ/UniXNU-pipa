@@ -71,7 +71,7 @@ struct Bluetooth {
  * UART6 (qupv3_0_se6 @ 0x998000): GPIO 16 (CTS), 17 (RFR), 18 (TX), 19 (RX)
  * Control pins (bt_qca6390): GPIO 21 (BT_EN), GPIO 124 (SW_CTRL) */
 constexpr unsigned kUartCts = 16, kUartRfr = 17, kUartTx = 18, kRx = 19, kBtEnable = 21, kSwCtrl = 124;
-constexpr uint32_t kBtEnableCfg = 1u | (3u << 6) | (1u << 9); // pull-down, 8 mA, output (matches WifiProbe kWlanEn & j716f.dts bt_en)
+constexpr uint32_t kBtEnableCfg = 1u | (3u << 6) | (1u << 9); // pull-down, 8 mA, output (matches WifiProbe kWlanEn and the pipa BT_EN pin)
 constexpr uint32_t kDmaBytes = 32768;
 
 void recordRow(unsigned slot, const char *fmt, ...) {
@@ -522,7 +522,7 @@ int powerOn() {
     bt.gated = true;
     native_bluetooth_stats[14] = 3;
     native_bt_step = 3;
-    /* Match j716f.dtb qupv3_se6_default_{cts,rtsrx,tx}: CTS no-pull, RFR+RX pull-down (QCA6390 bootstrap!), TX pull-up. */
+    /* Match pipa.dtb qupv3_se6_default_{cts,rtsrx,tx}: CTS no-pull, RFR+RX pull-down (QCA6390 bootstrap!), TX pull-up. */
     pin(kUartCts, 0u);
     pin(kUartRfr, 1u);
     pin(kUartTx, 3u);
@@ -581,7 +581,7 @@ int powerOn() {
     }
     pin(kBtEnable, kBtEnableCfg, 1);
     IOSleep(100);
-    /* Match j716f.dtb qupv3_se6_{ctsrx,rts,tx}: function=qup6(1), CTS+RX no-pull, RFR pull-down, TX pull-up. */
+    /* Match pipa.dtb qupv3_se6_{ctsrx,rts,tx}: function=qup6(1), CTS+RX no-pull, RFR pull-down, TX pull-up. */
     pin(kUartCts, (1u << 2) | 0u);
     pin(kUartRfr, (1u << 2) | 1u);
     pin(kUartTx, (1u << 2) | 3u);
