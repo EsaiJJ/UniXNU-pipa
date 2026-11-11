@@ -217,7 +217,7 @@ paths = ["board.toml", "configs/**", "dts/**", "patches/**", "scripts/**", "pack
 inputs = ["The prelinked iPadOS 17.7.11 kernel, Format 2 ADT, trust caches, the pipa DTB, the NGPUADD2 addon and the UEFI FD."]
 configuration = ["scripts/package.sh drives ./unixnu release with the pipa defconfig and build/pipa/pipa.dtb; the payload volume is PIPAESP and the image uses Android header v1."]
 procedure = ["Run bash scripts/package.sh --no-deps --uefi ../uefi-pipa with UNIXNU_UNIQUE_CHIP_ID set."]
-findings = ["2026-11-11 Renamed the pipa patch series, updated the GitHub workflows to xVanTuring/uefi-pipa and UniXNU/out/pipa, and added the pipa DTB and driver checks to CI."]
+findings = ["2026-11-11 Added scripts/extract-pipa-firmware.py, which pulls /vendor, modem and Bluetooth firmware from a booted pipa, records the ROM fingerprint as provenance and writes a SHA-256 manifest for proprietary-files.txt; it deliberately leaves the built-in Novatek image UNMEASURED.", "2026-11-11 Renamed the pipa patch series, updated the GitHub workflows to xVanTuring/uefi-pipa and UniXNU/out/pipa, and added the pipa DTB and driver checks to CI."]
 completion = ["One command builds the kernel, archives, firmware, payload and boot.img."]
 limits = ["The build needs the external UniXNU and uefi-pipa checkouts plus the firmware caches."]
 next_action = ["Run the package workflow and flash boot.img to slot B."]
@@ -228,6 +228,13 @@ revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = ".github/workflows/xnu-source-macos.yml"
 command = "Run the Pipa XNU source checks workflow"
 result = "Compiles dts/pipa.dts, validates board.toml and proprietary-files.txt, and runs the GopFramebuffer, QcomRpmh, QcomGeniSpi and ShengNovatekTouch host tests."
+
+[[area.evidence]]
+kind = "host"
+revision = "efd421170a2b99be7f5146d6b678d696f8f23abd"
+reference = "scripts/extract-pipa-firmware.py"
+command = "python3 -m py_compile scripts/extract-pipa-firmware.py"
+result = "The extractor parses and exits with a clear error when no adb device is present; it has not run against a tablet, so no firmware digest is claimed yet."
 
 [[area]]
 id = "diagnostics"
