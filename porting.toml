@@ -27,14 +27,14 @@ next_action = ["Boot the packaged image and record the first pipa hardware evide
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "dts/pipa.dts"
 command = "dtc -I dts -O dtb -i socs/sm8250/dts dts/pipa.dts -o /tmp/pipa.dtb"
 result = "The pipa fallback tree compiles with the shared SM8250 CPU, GICv3, timer and PSCI nodes."
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "scripts/check-pipa.py"
 command = "python3 scripts/check-pipa.py"
 result = "Stages build/pipa/pipa.dtb from uefi-pipa when available (or compiles dts/pipa.dts) and writes build/pipa/check.json with hardware_boot_demonstrated = false."
@@ -54,7 +54,7 @@ next_action = ["Run check-pipa.py against a full uefi-pipa checkout and build th
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "scripts/check-pipa.py"
 command = "UNIXNU_UEFI=../uefi-pipa python3 scripts/check-pipa.py"
 result = "Validates the pipa platform files, the pipa.toml boot-image keys, the UEFI FD/stack descriptors and the Resources/DTBs/pipa.dtb splash region."
@@ -74,7 +74,7 @@ next_action = ["Verify the secondary-core bring-up and EPSS clock transitions on
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "socs/sm8250/dts/sm8250.dtsi"
 command = "dtc -I dts -O dtb -i socs/sm8250/dts dts/pipa.dts -o /tmp/pipa.dtb && fdtget /tmp/pipa.dtb /cpus/cpu@700 compatible"
 result = "The tree compiles with 8 CPU nodes and the GICv3 redistributor stride."
@@ -112,7 +112,7 @@ next_action = ["Boot with native-ufs-root=1 and check the APFS mount."]
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "drivers/ShengUfs/PipaSmmuTakeover.h"
 command = "grep -n 'kPipaUfsStreams' drivers/ShengUfs/PipaSmmuTakeover.h"
 result = "The SMMU plan uses the SM8250 UFS streams 0x0e0 and 0x4e0, matching the pipa DT's iommus."
@@ -132,7 +132,7 @@ next_action = ["Port the KTZ8866 backlight driver and then enable sheng-backligh
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "scripts/build-gop-legacy-display.py"
 command = "python3 -m py_compile scripts/build-gop-legacy-display.py"
 result = "The builder no longer copies or compiles AppleARMBacklight.cpp / BacklightProbe.cpp; the backlight symbols stay weak in the other objects."
@@ -152,7 +152,7 @@ next_action = ["Boot and verify the axes, the 40x60 matrix and the attention-lin
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "drivers/QcomGeniSpi/Test/geni-spi.c"
 command = "gcc -std=c11 -O2 -Wall -Wextra -Werror drivers/QcomGeniSpi/Test/geni-spi.c drivers/QcomGeniSpi/GeniSpi.c -o /tmp/geni-spi && /tmp/geni-spi"
 result = "The GENI SPI register-model test and the Novatek protocol/point-report/touch-core host tests pass; hardware is not involved."
@@ -204,7 +204,7 @@ next_action = ["Compare the gauge with Android over a charge/discharge cycle."]
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "package/NativeBatteryTests.c"
 command = "gcc -std=c11 -Wall -Wextra -Werror -I package package/NativeBatteryTests.c -o /tmp/pipa-battery && /tmp/pipa-battery"
 result = "The PM8150B gauge/charger decoding (SOC ramp, voltage, current, temperature, charge stage) passes against Android's recorded values; no hardware is read."
@@ -224,7 +224,7 @@ next_action = ["Run the package workflow and flash boot.img to slot B."]
 
 [[area.evidence]]
 kind = "host"
-revision = "COMMIT_SHA"
+revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = ".github/workflows/xnu-source-macos.yml"
 command = "Run the Pipa XNU source checks workflow"
 result = "Compiles dts/pipa.dts, validates board.toml and proprietary-files.txt, and runs the GopFramebuffer, QcomRpmh, QcomGeniSpi and ShengNovatekTouch host tests."
