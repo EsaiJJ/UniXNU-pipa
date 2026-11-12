@@ -47,7 +47,7 @@ paths = ["proprietary-files.txt", "scripts/check-pipa.py", "board.toml"]
 inputs = ["Mu-Silicium uefi-pipa platform (Platforms/Xiaomi/pipaPkg/pipa.dsc, pipa.fdf, Resources/Configs/pipa.toml) and the pipa UEFI memory map."]
 configuration = ["board.toml [firmware] builds Platforms/Xiaomi/pipaPkg/pipa.dsc and expects Build/pipaPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd.", "check-pipa.py verifies the dsc/fdf/includes, the pipa.toml [uefi_fd] and [boot_image] values, the page alignment and non-overlap of MemoryMapLib descriptors, and the Binaries/pipa inputs."]
 procedure = ["Clone xVanTuring/uefi-pipa branch pipa, then run python3 scripts/check-pipa.py with UNIXNU_UEFI pointing at it."]
-findings = ["2026-11-12 check-pipa.py now reports a missing dtc separately instead of blaming a missing or uncompilable dts/pipa.dts.", "2026-11-10 Replaced the TB-J716F firmware paths with pipaPkg and the pipa memory descriptors (UEFI FD 0x9fc00000+0x300000, stack 0x9ff90000+0x40000, display reserved 0x9c000000+0x2400000)."]
+findings = ["2026-11-12 board.toml now describes the target 8 GB unit's DRAM (span 0x80000000..0x280000000); the pipaPkg descriptors (UEFI FD 0x9fc00000+0x300000, stack 0x9ff90000+0x40000, display reserved 0x9c000000+0x2400000) all stay inside the first measured range, so no firmware value changed.", "2026-11-12 check-pipa.py now reports a missing dtc separately instead of blaming a missing or uncompilable dts/pipa.dts.", "2026-11-10 Replaced the TB-J716F firmware paths with pipaPkg and the pipa memory descriptors (UEFI FD 0x9fc00000+0x300000, stack 0x9ff90000+0x40000, display reserved 0x9c000000+0x2400000)."]
 completion = ["The pipa firmware source builds with UniXNU, the boot memory driver and DarwinBoot added."]
 limits = ["The uefi-pipa checkout and its Binaries submodule are external; the static firmware checks are skipped when the checkout is absent."]
 next_action = ["Run check-pipa.py against a full uefi-pipa checkout and build the FD."]
@@ -97,6 +97,13 @@ kind = "source"
 reference = "board.toml"
 result = "The [payload] and [payload.adt] DRAM values match the two measured banks (base 0x80000000, end 0x280000000, span 0x200000000)."
 
+[[area.evidence]]
+kind = "host"
+revision = "164551774d990edaa4ae59a277137d3b246ebf7d"
+reference = "scripts/extract-pipa-firmware.py"
+command = "python3 scripts/extract-pipa-firmware.py --skip-pull --provisional --force"
+result = "On the target unit, read /proc/device-tree/memory through the booted ColorOS port: 0x80000000+0x3bb00000 and 0xc0000000+0x1c0000000, span 0x200000000, DT model 'Qualcomm Technologies, Inc. xiaomi pipa', MemTotal 7806388 KiB; the same map as uefi-pipa's Resources/DTBs/pipa.dts."
+
 [[area]]
 id = "storage"
 status = "implemented"
@@ -117,6 +124,13 @@ reference = "drivers/ShengUfs/PipaSmmuTakeover.h"
 command = "grep -n 'kPipaUfsStreams' drivers/ShengUfs/PipaSmmuTakeover.h"
 result = "The SMMU plan uses the SM8250 UFS streams 0x0e0 and 0x4e0, matching the pipa DT's iommus."
 
+[[area.evidence]]
+kind = "host"
+revision = "164551774d990edaa4ae59a277137d3b246ebf7d"
+reference = "scripts/extract-pipa-firmware.py"
+command = "python3 scripts/extract-pipa-firmware.py --skip-pull --provisional --force"
+result = "On the target unit, measured userdata as /dev/block/sda34, start sector 21594112, size 473448408 512-byte sectors, last 4 KiB LBA 0x3b037fa (242405584896 bytes); board.toml [userdata] carries that window."
+
 [[area]]
 id = "display"
 status = "implemented"
@@ -125,7 +139,7 @@ paths = ["drivers/GopFramebuffer/**", "package/LegacyDisplayProbe.cpp", "package
 inputs = ["1800x2880 UEFI GOP scanout at 0x9c000000, the pipa display reserved region 0x9c000000+0x2400000, and the upstream pipa GPU scanout path."]
 configuration = ["board.toml sets CONFIG_XNU_NATIVE_LEGACY_DISPLAY, display-scale = 2, display-rotation = 0, sheng-vsync=60 and sheng-fb-gpu=1; the GOP frame buffer and the GPU copy_rows presenter are built into libNativeLegacyDisplay.late.a."]
 procedure = ["Boot with the pipa UEFI GOP initialized and check the framebuffer rows and the scanout copy in the log."]
-findings = ["2026-11-10 Set the pipa 1800x2880 GOP aperture and UI scale; removed the TB-J716F RM692E6 backlight sources from the archive.", "The KTZ8866 brightness controller (I2C11 0x11, enable GPIO139) is not ported, so sheng-backlight stays unset and the panel brightness is whatever the firmware left."]
+findings = ["2026-11-12 board.toml now carries the target 8 GB unit's DRAM values; the GOP scanout 0x9c000000+0x2400000 sits inside the first measured range (0x80000000+0x3bb00000), so no display value changed.", "2026-11-10 Set the pipa 1800x2880 GOP aperture and UI scale; removed the TB-J716F RM692E6 backlight sources from the archive.", "The KTZ8866 brightness controller (I2C11 0x11, enable GPIO139) is not ported, so sheng-backlight stays unset and the panel brightness is whatever the firmware left."]
 completion = ["WindowServer presents the desktop through the GOP framebuffer with GPU scanout copies."]
 limits = ["No runtime brightness control and no native MDSS mode setting; the bootloader's panel state is used."]
 next_action = ["Port the KTZ8866 backlight driver and then enable sheng-backlight."]
@@ -165,7 +179,7 @@ paths = ["drivers/Adreno650/**", "drivers/AdrenoMetal/**", "kits/ArmSmmu4K/**", 
 inputs = ["Adreno 650 (chip id 0x06050002), GMU firmware a650_gmu.bin, SQE a650_sqe.fw and the TZ PAS 13 zap shader a650_zap.elf."]
 configuration = ["board.toml sets pipa-gpu=12, sheng-gpu-addon=1 and sheng-fb-gpu=1; pipa_defconfig enables CONFIG_XNU_NATIVE_ADRENO with libAdreno650.a.", "GpuProbe keeps the upstream pipa defaults: Turnip \"nocb\", the upstream sandbox grant list, and no GPU DCVS block."]
 procedure = ["Run pipa-gpu=12 with the GPU addon, then exercise SpringBoard/Settings and read the gpu.status counters."]
-findings = ["2026-11-10 Adopted the upstream pipa GpuProbe.cpp, NativeBatteryBoard.h, and the pipa GPU addon script name; the pipa GPU defaults replace the TB-J716F DCVS/backlight add-on."]
+findings = ["2026-11-12 board.toml now carries the target 8 GB unit's DRAM span (0x80000000..0x280000000); the Adreno 650 firmware/PM4 paths and the GPU SMMU mappings are unchanged.", "2026-11-10 Adopted the upstream pipa GpuProbe.cpp, NativeBatteryBoard.h, and the pipa GPU addon script name; the pipa GPU defaults replace the TB-J716F DCVS/backlight add-on."]
 completion = ["The Adreno 650 KMD, GMU, GPU SMMU and NativeAdrenoMetal/Turnip render the desktop."]
 limits = ["No pipa GPU run in this fork; GMU/SQE/zap firmware files are external."]
 next_action = ["Boot pipa-gpu=12 on hardware and capture the GPU log rows."]
