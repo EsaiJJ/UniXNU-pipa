@@ -74,6 +74,7 @@ UniXNU-pipa/
     ├── build-pipa-gpu-addon.py          # NativeAdrenoMetal bundle, trust bundle, NGPUADD2 addon
     ├── build-gop-legacy-display.py      # libNativeLegacyDisplay.late.a (display, touch, USB, battery)
     ├── check-pipa.py                    # Firmware preflight and boot DTB staging
+    ├── check-pipa-board.py              # board.toml / DTS / firmware-manifest and SKU checks
     ├── extract-pipa-firmware.py         # Host-side identity + firmware pull and SHA-256 manifest
     ├── read-pipa-log.py                 # Ramoops reader over `fastboot boot`
     └── package.sh                       # UniXNU release wrapper (do not edit)
@@ -130,6 +131,9 @@ manifest.
 
 ## Boot Arguments
 
+The complete list is `[payload].kernel_args` in `board.toml`; most entries there are shared UniXNU and
+offline-render flags. The switches below are the pipa-specific ones that decide what the port does:
+
 `board.toml` sets the pipa bring-up set:
 
 - `pipa-touch=5` - Novatek report loop on the attention line
@@ -155,6 +159,10 @@ With `pipa-usb=1` the tablet enumerates as a CDC-ACM port (`1209:0001`) and acce
 - No hardware run of this fork. The reference port's results do not transfer automatically to a different
   UEFI build, firmware manifest or `board.toml`.
 - The KTZ8866 backlight, QCA6390 Wi-Fi/Bluetooth, and native USB paths are absent or default-off.
-- The 16 GB memory map is the measured unit's; a different capacity needs its own `/memory` banks.
+- The board file carries the **16 GB** reference unit's memory map, including an 8 GiB bank at 32 GiB. An
+  8 GB unit must drop that bank and gets a different `dram_size` and `owned_memory_size`; `--ddr-gb 8` makes
+  `scripts/check-pipa-board.py` fail until it does.
+- `[userdata]` is a **128 GB** unit's window (114.4 GB). A 256 GB unit needs its own `last_lba` from the
+  target GPT, because that window is what the erase step writes. `--storage-gb 256` asserts it.
 - `proprietary-files.txt` still has `UNMEASURED` pipa digests and the Adreno 650 digests were recorded on a
   TB-J716F vendor partition.

@@ -12,6 +12,8 @@
 
     // Export the radios under /soc (/arm-io in ADT) before launchd evaluates wifid's device-tree condition.
     // WifiProbe owns PCIe0 resources and fills local-mac-address at runtime; BluetoothProbe drives the BT pins.
+    // status = "okay" only keeps the ADT locator nodes present: neither driver starts until sheng-wifi=4 /
+    // sheng-bluetooth=1 is set in board.toml, which stays unset until the radios are verified on pipa.
     soc {
         wlan {
             compatible = "qcom,qca6390";
@@ -44,6 +46,8 @@
 
     // The measured 16 GB unit. Android's /memory has these three banks; the added 8 GiB is a bank of its own at
     // 32 GiB. XNU takes dram-base/dram-size as one range, so board.toml spans base to the end of the last bank.
+    // A stock 8 GB unit has only the first two banks and must not carry memory@800000000; see the SKU notes in
+    // README.md and scripts/check-pipa-board.py --ddr-gb.
     memory@80000000 {
         device_type = "memory";
         reg = <0x0 0x80000000 0x0 0x37700000>;

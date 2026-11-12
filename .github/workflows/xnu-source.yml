@@ -22,11 +22,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      # Pinned by commit: this job builds nothing secret, but a moving tag is still an unnecessary supply-chain input.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5
         with:
           python-version: '3.12'
 
@@ -41,41 +42,7 @@ jobs:
           dtc -I dts -O dtb -i socs/sm8250/dts dts/pipa.dts -o /tmp/pipa-hardware.dtb
           test -s /tmp/pipa-hardware.dtb
           python3 scripts/check-pipa.py
-          python3 - <<'PY'
-          import re
-          import tomllib
-          from pathlib import Path
-          board = tomllib.loads(Path('board.toml').read_text())
-          assert board['board']['name'] == 'pipa'
-          assert board['board']['soc'] == 'SM8250'
-          assert board['board']['kit'] == 'pipa'
-          args = board['payload']['kernel_args']
-          for wanted in ('pipa-touch=5', 'pipa-buttons=1', 'pipa-gpu=12',
-                         'sheng-gpu-addon=1', 'sheng-fb-gpu=1', 'native-ufs-root=1'):
-              assert wanted in args, wanted
-          for absent in ('j716f-touch=1', 'j716f-usb=1', 'sheng-tum=s',
-                         'sheng-backlight=1', 'sheng-wifi=4', 'sheng-bluetooth=1'):
-              assert absent not in args, absent
-          assert board['package']['defconfig']['ipados-17.7.11-21H461'] == 'pipa_defconfig'
-          assert Path('configs/pipa_defconfig').is_file()
-          assert board['device_tree']['source'] == 'device:dts/pipa.dts'
-          assert board['bootimg']['dtb'] == 'build/pipa/pipa.dtb'
-          lines = [
-              ln.strip() for ln in Path('proprietary-files.txt').read_text().splitlines()
-              if ln.strip() and not ln.strip().startswith('#')
-          ]
-          assert len(lines) >= 10
-          measured = 0
-          for ln in lines:
-              parts = [p.strip() for p in ln.split('|')]
-              assert len(parts) == 4, f'Bad entry: {ln}'
-              if parts[2] == 'UNMEASURED':
-                  continue
-              assert re.fullmatch(r'[0-9a-f]{64}', parts[2]), f'Bad digest: {ln}'
-              measured += 1
-          assert measured >= 7, f'only {measured} measured firmware digests'
-          print(f'Verified board.toml, pipa-hardware.dtb, and {len(lines)} firmware entries ({measured} measured)')
-          PY
+          python3 scripts/check-pipa-board.py
 
       - name: Compile and run Pipa board helper tests (GCC and Clang -Werror)
         run: |

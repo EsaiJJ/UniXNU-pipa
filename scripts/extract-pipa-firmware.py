@@ -7,12 +7,16 @@ fastboot is only for dumping whole partitions and for flashing the port afterwar
 
 What it does:
   - reads the properties that identify the unit and the ROM (provenance for every digest);
+  - records MemTotal and the userdata partition geometry (start and size from sysfs), because the board file's
+    DRAM map and userdata window are per-SKU and must be checked against the unit being measured;
   - refuses to run unless ro.product.device is pipa, unless --force is given;
   - pulls /vendor/firmware, /vendor/firmware_mnt/image (modem, qca6390) and /vendor/bt_firmware/image (bluetooth)
     into OUT/root/, plus the Wi-Fi config files under /vendor/etc/wifi;
   - copies the live device tree from /sys/firmware/fdt when the shell can read it;
   - hashes every pulled file and writes OUT/manifest.json and OUT/manifest.tsv;
   - compares the Adreno 650 digests already recorded in proprietary-files.txt against what it pulled.
+
+The adb serial is recorded only as a truncated SHA-256: it is a provenance key, not something to publish.
 
 The Novatek NT36532 firmware is normally built into the stock kernel image, so it will not appear under /vendor;
 the manifest notes that it must come from vendor_boot/boot (unpack_bootimg) and is left UNMEASURED on purpose.
@@ -70,7 +74,7 @@ def adb_devices():
 
 
 def shell(serial, command, check=True):
-    return adb(serial, 'shell', command, check=check).decode(errors='replace').strip()
+    return adb(serial, 'shell', command, check=check).strip()
 
 
 def getprop(serial, name):
@@ -97,6 +101,31 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def device_facts(serial):
+    """The two per-SKU values the board file hardcodes: installed RAM and the userdata partition geometry."""
+    facts = {}
+    total = shell(serial, "awk '/MemTotal/ {print $2}' /proc/meminfo", check=False)
+    if total.isdigit():
+        facts['memtotal_kib'] = int(total)
+
+    block = shell(serial, 'readlink -f /dev/block/by-name/userdata', check=False)
+    facts['userdata_block'] = block or None
+    name = block.rsplit('/', 1)[-1] if block else ''
+    if re.fullmatch(r'sd[a-z]+\d+', name):
+        start = shell(serial, f'cat /sys/class/block/{name}/start', check=False)
+        size = shell(serial, f'cat /sys/class/block/{name}/size', check=False)
+        if start.isdigit() and size.isdigit():
+            first, count = int(start), int(size)   # 512-byte sectors
+            facts.update({
+                'userdata_start_sector_512': first,
+                'userdata_size_sector_512': count,
+                'userdata_first_lba_4k': first // 8,
+                'userdata_last_lba_4k': (first + count) // 8 - 1,
+                'userdata_bytes': count * 512,
+            })
+    return facts
+
+
 def rel_to_manifest(relative):
     """Map a pulled path under root/ to the firmware/ or image/ name proprietary-files.txt uses."""
     name = Path(relative).name
@@ -107,6 +136,10 @@ def rel_to_manifest(relative):
     if name in {'htbtfw20.tlv', 'htnv20.bin'}:
         return f'image/{name}'
     if name == 'novatek_nt36532_m82_fw_tm.bin':
+        return f'firmware/{name}'
+    # The Adreno 650 images in proprietary-files.txt were recorded on a TB-J716F; pulling the pipa copies lets the
+    # manifest say whether the shared SM8250-AC firmware really is byte-identical.
+    if name.startswith('a650_'):
         return f'firmware/{name}'
     return None
 
@@ -133,6 +166,7 @@ def main():
     out = args.out.resolve()
     root = out / 'root'
     (out / 'dtb').mkdir(parents=True, exist_ok=True)
+    facts = device_facts(serial)
 
     files = []
     if not args.skip_pull:
@@ -174,8 +208,9 @@ def main():
     manifest = {
         'generated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'provenance': {
-            'serial': serial,
+            'serial_sha256_16': hashlib.sha256(serial.encode()).hexdigest()[:16],
             'props': props,
+            'device_facts': facts,
             'source': 'booted Android, adb pull of /vendor, /vendor/firmware_mnt and /vendor/bt_firmware',
         },
         'files': files,
@@ -184,6 +219,8 @@ def main():
             'novatek': 'NT36532 firmware is built into the stock kernel image; extract it from vendor_boot/boot, '
                        'not from /vendor, and record the kernel build it came from.',
             'unmeasured': 'Replace UNMEASURED in proprietary-files.txt only with a digest from this manifest.',
+            'sku': 'Compare device_facts with [userdata] first_lba/last_lba and the DRAM map in board.toml: both are '
+                   'per-SKU, and the tree currently carries the 16 GB / 128 GB reference unit values.',
         },
     }
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -194,7 +231,9 @@ def main():
                          f"{entry.get('recorded_sha256', '-')}\n")
 
     print(json.dumps({'out': str(out), 'files': len(files), 'missing': manifest['expected_but_missing'],
-                      'device': props['ro.product.device'], 'fingerprint': props['ro.build.fingerprint']}, indent=2))
+                      'device': props['ro.product.device'], 'fingerprint': props['ro.build.fingerprint'],
+                      'memtotal_kib': facts.get('memtotal_kib'),
+                      'userdata_bytes': facts.get('userdata_bytes')}, indent=2))
 
 
 if __name__ == '__main__':

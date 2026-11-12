@@ -64,20 +64,25 @@ def resolve_device_root() -> Path:
     return Path('.').resolve()
 
 
-def stage_dtb(uefi_root: Path, device_root: Path) -> str | None:
+def stage_dtb(uefi_root: Path, device_root: Path) -> tuple[str | None, str | None]:
+    """Returns (sha256, reason) for the staged tree; reason is set when nothing could be staged."""
     STAGE_DTB.parent.mkdir(parents=True, exist_ok=True)
     uefi_dtb = uefi_root / DTB_REL
     if uefi_dtb.is_file():
         shutil.copyfile(uefi_dtb, STAGE_DTB)
-        return hashlib.sha256(STAGE_DTB.read_bytes()).hexdigest()
+        return hashlib.sha256(STAGE_DTB.read_bytes()).hexdigest(), None
 
     dts = device_root / 'dts/pipa.dts'
     inc = device_root / 'socs/sm8250/dts'
+    if not dts.is_file():
+        return None, f'{dts} is missing'
+    if not inc.is_dir():
+        return None, f'{inc} is missing (the shared SM8250 include tree)'
     dtc = shutil.which('dtc')
-    if dts.is_file() and inc.is_dir() and dtc:
-        subprocess.run([dtc, '-I', 'dts', '-O', 'dtb', '-i', str(inc), str(dts), '-o', str(STAGE_DTB)], check=True)
-        return hashlib.sha256(STAGE_DTB.read_bytes()).hexdigest()
-    return None
+    if not dtc:
+        return None, 'dtc is not installed; install device-tree-compiler or set UNIXNU_UEFI to a uefi-pipa checkout'
+    subprocess.run([dtc, '-I', 'dts', '-O', 'dtb', '-i', str(inc), str(dts), '-o', str(STAGE_DTB)], check=True)
+    return hashlib.sha256(STAGE_DTB.read_bytes()).hexdigest(), None
 
 
 def patch_baseline_script() -> None:
@@ -206,7 +211,7 @@ def main() -> int:
     patch_baseline_script()
     uefi_root = resolve_uefi_root()
     device_root = resolve_device_root()
-    dtb_sha256 = stage_dtb(uefi_root, device_root)
+    dtb_sha256, dtb_error = stage_dtb(uefi_root, device_root)
 
     errors, notes = [], []
     details = {'descriptors': 0, 'vendor_inputs': 0, 'missing_vendor_inputs': []}
@@ -216,7 +221,7 @@ def main() -> int:
         notes.append(f'no uefi-pipa checkout at {uefi_root}; static firmware checks skipped')
 
     if dtb_sha256 is None:
-        errors.append('could not stage build/pipa/pipa.dtb (no Resources/DTBs/pipa.dtb and no compilable dts/pipa.dts)')
+        errors.append(f'could not stage build/pipa/pipa.dtb: {dtb_error}')
 
     report = {
         'uefi_root': str(uefi_root),

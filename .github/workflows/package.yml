@@ -21,16 +21,16 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
           path: device
           submodules: recursive
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
           repository: UniXNU/UniXNU
           path: UniXNU
           submodules: recursive
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
           repository: xVanTuring/uefi-pipa
           ref: pipa
@@ -63,7 +63,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-pipa
       - name: images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: images-${{ inputs.os }}
           retention-days: 1
