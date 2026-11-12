@@ -238,6 +238,13 @@ result = "Passes on the reference unit's values and fails with --ddr-gb 8 or --s
 
 [[area.evidence]]
 kind = "host"
+revision = "ce04e58fd3ec9fc310f84f4ef802e778b488787c"
+reference = "scripts/extract-pipa-firmware.py"
+command = "PATH=/tmp/fakeadb:$PATH python3 scripts/extract-pipa-firmware.py --skip-pull --provisional (fake adb: 8 GB pipa, two /memory banks, NT36532 panel, one multitouch device)"
+result = "Writes manifest.json with suggested_adt dram_base 0x80000000 / dram_size 0x200000000, MemTotal, userdata start/size, panel, touch, battery, display and kernel facts, provisional=true and no cleartext adb serial; the same run with a device that is not pipa needs --force, and an under-reported DT raises the memory note."
+
+[[area.evidence]]
+kind = "host"
 revision = "efd421170a2b99be7f5146d6b678d696f8f23abd"
 reference = "scripts/extract-pipa-firmware.py"
 command = "python3 -m py_compile scripts/extract-pipa-firmware.py"
