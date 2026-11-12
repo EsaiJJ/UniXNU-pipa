@@ -124,7 +124,28 @@ recorded here.
 
 A stock ROM is the preferred source: it gives reproducible digests and the `dtbo`/`vendor_boot` the UEFI build
 expects. If the tablet is on a custom ROM, keep its fingerprint in the manifest and treat the results as
-ROM-specific. The Novatek `NT36532` touch firmware is normally built into the stock kernel, so it comes from
+ROM-specific. `--provisional` records that distinction in the manifest.
+
+The read-only hardware pass needs no root, no fastboot and changes nothing on the tablet. It works the same on
+a stock or a custom ROM:
+
+```sh
+python3 scripts/extract-pipa-firmware.py --skip-pull --provisional
+```
+
+It prints and stores in `manifest.json` the values this tree still has to re-measure:
+
+- every `/memory` bank from `/proc/device-tree`, plus `suggested_adt` (`dram_base`, `dram_size`) for the unit;
+  `board.toml` and `dts/pipa.dts` still carry the 16 GB reference unit's map;
+- `MemTotal` and the `userdata` start/size from sysfs, which give the GPT LBA window a 256 GB unit needs;
+- panel name/model, multitouch input device, battery design capacity and display size, which identify the
+  panel and touch variant and stay valid regardless of ROM;
+- the kernel version, so a custom kernel is not later mistaken for the stock one.
+
+On a ported ROM, the RAM and storage geometry are hardware and can be used directly. The `/vendor` digests and
+kernel version belong to that ROM, so do not copy them into `proprietary-files.txt` as stock values.
+
+The Novatek `NT36532` touch firmware is normally built into the stock kernel, so it comes from
 `vendor_boot`/`boot` (via `unpack_bootimg`), not from `/vendor`; the extractor leaves it `UNMEASURED` on
 purpose rather than recording a custom-kernel blob as stock. Replace `UNMEASURED` only with digests from this
 manifest.

@@ -7,8 +7,12 @@ fastboot is only for dumping whole partitions and for flashing the port afterwar
 
 What it does:
   - reads the properties that identify the unit and the ROM (provenance for every digest);
-  - records MemTotal and the userdata partition geometry (start and size from sysfs), because the board file's
-    DRAM map and userdata window are per-SKU and must be checked against the unit being measured;
+  - records MemTotal, the /memory banks (from /proc/device-tree, no root needed) and the userdata partition
+    geometry (start and size from sysfs), because the board file's DRAM map and userdata window are per-SKU;
+  - records the panel name, the multitouch input devices, the battery design capacity and the display size, which
+    are read-only hardware facts and stay valid even when the ROM is a port;
+  - with --provisional, marks a run on a ported ROM: the RAM/storage/panel facts are still the hardware, but the
+    /vendor and kernel digests belong to that ROM and must not be written into proprietary-files.txt as stock;
   - refuses to run unless ro.product.device is pipa, unless --force is given;
   - pulls /vendor/firmware, /vendor/firmware_mnt/image (modem, qca6390) and /vendor/bt_firmware/image (bluetooth)
     into OUT/root/, plus the Wi-Fi config files under /vendor/etc/wifi;
@@ -21,7 +25,7 @@ The adb serial is recorded only as a truncated SHA-256: it is a provenance key, 
 The Novatek NT36532 firmware is normally built into the stock kernel image, so it will not appear under /vendor;
 the manifest notes that it must come from vendor_boot/boot (unpack_bootimg) and is left UNMEASURED on purpose.
 
-usage: extract-pipa-firmware.py [--out DIR] [--serial SERIAL] [--force] [--skip-pull]
+usage: extract-pipa-firmware.py [--out DIR] [--serial SERIAL] [--force] [--skip-pull] [--provisional]
 Output: DIR/manifest.json, DIR/manifest.tsv, DIR/root/... and DIR/dtb/fdt.dtb when readable.
 """
 import argparse
@@ -42,6 +46,9 @@ PROPS = [
     'ro.boot.hardware.sku', 'ro.boot.product.hardware.sku', 'ro.build.fingerprint', 'ro.build.display.id',
     'ro.build.version.release', 'ro.build.version.incremental', 'ro.boot.slot_suffix',
     'ro.boot.dynamic_partitions', 'ro.boot.verifiedbootstate', 'ro.boot.flash.locked', 'ro.boot.veritymode',
+    # A ported ROM can keep a pipa vendor image or replace it; these say which, and whether the DT came from pipa.
+    'ro.vendor.build.fingerprint', 'ro.vendor.product.device', 'ro.system.build.fingerprint', 'ro.build.product',
+    'ro.boot.hwversion', 'ro.boot.project_name', 'ro.boot.ddr_size',
 ]
 
 PULL = [
@@ -101,12 +108,127 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def memory_banks(serial):
+    """The /memory nodes, which the bootloader fills from the unit's actual DDR configuration.
+
+    /proc/device-tree and /sys/firmware/devicetree/base are world-readable on Android, unlike /sys/firmware/fdt,
+    so this works on a stock or a ported ROM without root.
+    """
+    facts = {}
+    for root in ('/proc/device-tree', '/sys/firmware/devicetree/base'):
+        nodes = [name for name in shell(serial, f'ls {root} 2>/dev/null', check=False).split()
+                 if name.startswith('memory@')]
+        if not nodes:
+            continue
+        banks = []
+        for node in sorted(nodes):
+            raw = shell(serial, f'od -An -tx1 {root}/{node}/reg 2>/dev/null | tr -d " \\n\\r"', check=False)
+            try:
+                cells = [int(raw[index:index + 8], 16) for index in range(0, len(raw) - 7, 8)]
+            except ValueError:
+                continue
+            if len(cells) != 4:
+                continue
+            banks.append(((cells[0] << 32) | cells[1], (cells[2] << 32) | cells[3]))
+        if banks:
+            bases = [base for base, _ in banks]
+            ends = [base + size for base, size in banks]
+            facts['memory_banks'] = [{'base': f'{base:#x}', 'size': f'{size:#x}', 'size_gib': round(size / 2**30, 3)}
+                                     for base, size in banks]
+            facts['memory_total_bytes'] = sum(size for _, size in banks)
+            facts['memory_span_bytes'] = max(ends) - min(bases)
+            facts['suggested_adt'] = {
+                'dram_base': f'{min(bases):#x}',
+                'dram_size': f'{max(ends) - min(bases):#x}',
+            }
+            return facts
+    return facts
+
+
+def read_sysfs(serial, paths):
+    """First line of each readable sysfs file, keyed by the label given in paths."""
+    values = {}
+    for label, path in paths.items():
+        value = shell(serial, f'cat {path} 2>/dev/null', check=False)
+        if value:
+            values[label] = value.splitlines()[0].strip()
+    return values
+
+
+def abs_bits(text):
+    """/proc/bus/input/devices prints bitmaps high word first; return them as one integer."""
+    bits = 0
+    for index, word in enumerate(reversed(text.split())):
+        bits |= int(word, 16) << (32 * index)
+    return bits
+
+
+def hardware_facts(serial):
+    """Panel, touch, battery and display facts, all readable without root on a stock or a ported ROM."""
+    facts = {}
+
+    # Qualcomm kernels keep the panel model in the DSI panel node of the device tree.
+    nodes = shell(serial, "find /proc/device-tree /sys/firmware/devicetree/base -name 'qcom,mdss-dsi-panel-name' "
+                          "-o -name 'qcom,mdss-dsi-panel-model' 2>/dev/null | head -4", check=False)
+    panels = []
+    for node in nodes.split():
+        value = shell(serial, f"tr -d '\\000' < {node} 2>/dev/null", check=False).strip()
+        if value and value not in panels:
+            panels.append(value)
+    if panels:
+        facts['panel'] = panels
+
+    # A touchscreen is an input device that advertises ABS_MT_POSITION_X and ABS_MT_POSITION_Y (bits 53 and 54).
+    devices, current = [], {}
+    for line in shell(serial, 'cat /proc/bus/input/devices 2>/dev/null', check=False).splitlines():
+        if not line.strip():
+            if current:
+                devices.append(current)
+            current = {}
+        elif line.startswith('N: Name='):
+            current['name'] = line.split('Name=', 1)[1].strip().strip('"')
+        elif line.startswith('H: Handlers='):
+            current['handlers'] = line.split('Handlers=', 1)[1].strip()
+        elif line.startswith('B: ABS='):
+            current['abs'] = line.split('ABS=', 1)[1].strip()
+    if current:
+        devices.append(current)
+    touch = [device['name'] for device in devices
+             if device.get('name') and 'abs' in device
+             and abs_bits(device['abs']) & (1 << 53) and abs_bits(device['abs']) & (1 << 54)]
+    if touch:
+        facts['touch'] = touch
+
+    battery = read_sysfs(serial, {
+        'charge_full_design_uah': '/sys/class/power_supply/battery/charge_full_design',
+        'voltage_max_design_uv': '/sys/class/power_supply/battery/voltage_max_design',
+        'cycle_count': '/sys/class/power_supply/battery/cycle_count',
+    })
+    if battery:
+        facts['battery'] = battery
+
+    display = {}
+    for label, command in (('physical_size', 'wm size'), ('density', 'wm density')):
+        value = shell(serial, f'{command} 2>/dev/null', check=False)
+        if ':' in value:
+            display[label] = value.split(':', 1)[1].strip().splitlines()[0]
+    if display:
+        facts['display'] = display
+
+    kernel = shell(serial, 'cat /proc/version 2>/dev/null', check=False)
+    if kernel:
+        facts['kernel'] = kernel.splitlines()[0]
+    return facts
+
+
 def device_facts(serial):
-    """The two per-SKU values the board file hardcodes: installed RAM and the userdata partition geometry."""
+    """The per-SKU values board.toml hardcodes: installed RAM and the userdata partition geometry."""
     facts = {}
     total = shell(serial, "awk '/MemTotal/ {print $2}' /proc/meminfo", check=False)
     if total.isdigit():
         facts['memtotal_kib'] = int(total)
+    facts.update(memory_banks(serial))
+    facts.update(hardware_facts(serial))
 
     block = shell(serial, 'readlink -f /dev/block/by-name/userdata', check=False)
     facts['userdata_block'] = block or None
@@ -150,6 +272,8 @@ def main():
     parser.add_argument('--serial', default=os.environ.get('PIPA_SERIAL', ''), help='adb serial (env PIPA_SERIAL)')
     parser.add_argument('--force', action='store_true', help='continue even when ro.product.device is not pipa')
     parser.add_argument('--skip-pull', action='store_true', help='only read identity and write the manifest')
+    parser.add_argument('--provisional', action='store_true',
+                        help='mark the run as a ported ROM: hardware facts are real, its firmware digests are not stock')
     args = parser.parse_args()
 
     serial = args.serial
@@ -204,6 +328,23 @@ def main():
             entry['recorded_sha256'] = recorded[entry['manifest']]
             entry['matches_recorded'] = entry['recorded_sha256'] == entry['sha256']
 
+    notes = {
+        'novatek': 'NT36532 firmware is built into the stock kernel image; extract it from vendor_boot/boot, '
+                   'not from /vendor, and record the kernel build it came from.',
+        'unmeasured': 'Replace UNMEASURED in proprietary-files.txt only with a digest from this manifest.',
+        'sku': 'Compare device_facts with [userdata] first_lba/last_lba and the DRAM map in board.toml: both are '
+               'per-SKU, and the tree currently carries the 16 GB / 128 GB reference unit values.',
+    }
+    if args.provisional:
+        notes['provisional'] = ('This run came from a ported ROM. The RAM, storage, panel and battery facts are the '
+                                'hardware; the /vendor and kernel digests belong to that ROM and are provisional until '
+                                'a stock image confirms them.')
+    memory_total = facts.get('memory_total_bytes')
+    memtotal = facts.get('memtotal_kib')
+    if memory_total and memtotal and memory_total < memtotal * 1024:
+        notes['memory'] = ('The DT memory nodes hold less than MemTotal, so the live tree does not describe the '
+                           'installed RAM; do not use its banks for board.toml.')
+
     measured = {entry['manifest'] for entry in files if entry['manifest']}
     manifest = {
         'generated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -212,16 +353,11 @@ def main():
             'props': props,
             'device_facts': facts,
             'source': 'booted Android, adb pull of /vendor, /vendor/firmware_mnt and /vendor/bt_firmware',
+            'provisional': args.provisional,
         },
         'files': files,
         'expected_but_missing': sorted(EXPECTED - measured),
-        'notes': {
-            'novatek': 'NT36532 firmware is built into the stock kernel image; extract it from vendor_boot/boot, '
-                       'not from /vendor, and record the kernel build it came from.',
-            'unmeasured': 'Replace UNMEASURED in proprietary-files.txt only with a digest from this manifest.',
-            'sku': 'Compare device_facts with [userdata] first_lba/last_lba and the DRAM map in board.toml: both are '
-                   'per-SKU, and the tree currently carries the 16 GB / 128 GB reference unit values.',
-        },
+        'notes': notes,
     }
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     with (out / 'manifest.tsv').open('w') as handle:
@@ -233,6 +369,10 @@ def main():
     print(json.dumps({'out': str(out), 'files': len(files), 'missing': manifest['expected_but_missing'],
                       'device': props['ro.product.device'], 'fingerprint': props['ro.build.fingerprint'],
                       'memtotal_kib': facts.get('memtotal_kib'),
+                      'memory_banks': facts.get('memory_banks'),
+                      'suggested_adt': facts.get('suggested_adt'),
+                      'panel': facts.get('panel'),
+                      'touch': facts.get('touch'),
                       'userdata_bytes': facts.get('userdata_bytes')}, indent=2))
 
 
