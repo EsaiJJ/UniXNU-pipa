@@ -112,24 +112,28 @@ def memory_banks(serial):
     """The /memory nodes, which the bootloader fills from the unit's actual DDR configuration.
 
     /proc/device-tree and /sys/firmware/devicetree/base are world-readable on Android, unlike /sys/firmware/fdt,
-    so this works on a stock or a ported ROM without root.
+    so this works on a stock or a ported ROM without root. A node can be /memory or /memory@<base>, and its reg
+    property can hold more than one (address, size) pair.
     """
     facts = {}
     for root in ('/proc/device-tree', '/sys/firmware/devicetree/base'):
         nodes = [name for name in shell(serial, f'ls {root} 2>/dev/null', check=False).split()
-                 if name.startswith('memory@')]
+                 if name == 'memory' or name.startswith('memory@')]
         if not nodes:
             continue
         banks = []
         for node in sorted(nodes):
             raw = shell(serial, f'od -An -tx1 {root}/{node}/reg 2>/dev/null | tr -d " \\n\\r"', check=False)
+            raw = re.sub(r'\s+', '', raw)
             try:
                 cells = [int(raw[index:index + 8], 16) for index in range(0, len(raw) - 7, 8)]
             except ValueError:
                 continue
-            if len(cells) != 4:
+            if len(cells) % 4:
                 continue
-            banks.append(((cells[0] << 32) | cells[1], (cells[2] << 32) | cells[3]))
+            for index in range(0, len(cells), 4):
+                banks.append(((cells[index] << 32) | cells[index + 1],
+                              (cells[index + 2] << 32) | cells[index + 3]))
         if banks:
             bases = [base for base, _ in banks]
             ends = [base + size for base, size in banks]
@@ -166,6 +170,19 @@ def abs_bits(text):
 def hardware_facts(serial):
     """Panel, touch, battery and display facts, all readable without root on a stock or a ported ROM."""
     facts = {}
+
+    # The boot DT stays pipa even when a ported ROM spoofs build.prop, so record it as hardware provenance.
+    tree = {}
+    model = shell(serial, "tr -d '\\000' < /proc/device-tree/model 2>/dev/null", check=False)
+    model = model.replace('\x00', '').strip()
+    if model:
+        tree['model'] = model
+    compatible = shell(serial, "tr '\\000' '\\n' < /proc/device-tree/compatible 2>/dev/null", check=False)
+    entries = [line.strip() for line in compatible.replace('\x00', '\n').splitlines() if line.strip()]
+    if entries:
+        tree['compatible'] = entries
+    if tree:
+        facts['device_tree'] = tree
 
     # Qualcomm kernels keep the panel model in the DSI panel node of the device tree.
     nodes = shell(serial, "find /proc/device-tree /sys/firmware/devicetree/base -name 'qcom,mdss-dsi-panel-name' "
@@ -333,7 +350,8 @@ def main():
                    'not from /vendor, and record the kernel build it came from.',
         'unmeasured': 'Replace UNMEASURED in proprietary-files.txt only with a digest from this manifest.',
         'sku': 'Compare device_facts with [userdata] first_lba/last_lba and the DRAM map in board.toml: both are '
-               'per-SKU, and the tree currently carries the 16 GB / 128 GB reference unit values.',
+               'per-SKU. The tree carries this 8 GB / 256 GB unit\'s measured values; re-run on a different unit '
+               'before flashing it.',
     }
     if args.provisional:
         notes['provisional'] = ('This run came from a ported ROM. The RAM, storage, panel and battery facts are the '

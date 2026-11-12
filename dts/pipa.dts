@@ -44,25 +44,19 @@
         };
     };
 
-    // The measured 16 GB unit. Android's /memory has these three banks; the added 8 GiB is a bank of its own at
-    // 32 GiB. XNU takes dram-base/dram-size as one range, so board.toml spans base to the end of the last bank.
-    // A stock 8 GB unit has only the first two banks and must not carry memory@800000000; see the SKU notes in
-    // README.md and scripts/check-pipa-board.py --ddr-gb.
+    // Measured on the target 8 GB unit (Xiaomi pipa device tree, read from /proc/device-tree/memory on the booted
+    // ColorOS port): two ranges, ending at 0x280000000. The bootloader reserves the 0xbbb00000..0xc0000000 hole,
+    // which sits inside the single dram-base/dram-size span XNU receives. The 16 GB reference unit additionally had
+    // an 8 GiB bank at 32 GiB; this unit does not, so there is no memory@800000000 node.
     memory@80000000 {
         device_type = "memory";
-        reg = <0x0 0x80000000 0x0 0x37700000>;
+        reg = <0x0 0x80000000 0x0 0x3bb00000>;
         status = "okay";
     };
 
     memory@c0000000 {
         device_type = "memory";
         reg = <0x0 0xc0000000 0x1 0xc0000000>;
-        status = "okay";
-    };
-
-    memory@800000000 {
-        device_type = "memory";
-        reg = <0x8 0x00000000 0x2 0x00000000>;
         status = "okay";
     };
 };

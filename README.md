@@ -8,8 +8,9 @@ Specification: [UniXNU Porting Guide](https://unixnu.com/zh/porting/)
 
 This fork starts from the Lenovo TB-J716F board (same SM8250-AC SoC) and replaces its board-specific parts
 with the measured Xiaomi Pad 6 values. The upstream pipa port demonstrated touch, buttons, GPU and Metal on a
-16 GB unit; this fork's pipa build has **not** been run on hardware, so every "ported" item below is a build
-and source claim until someone boots it.
+16 GB unit; this fork targets an 8 GB / 256 GB unit and has read its memory map and GPT from the tablet, but the
+pipa build has **not** been run on hardware, so every "ported" item below is a build and source claim until
+someone boots it.
 
 ## Device Specifications
 
@@ -20,8 +21,10 @@ and source claim until someone boots it.
 - **Display**: 11" 1800x2880 panel, UEFI GOP scanout at `0x9c000000`, UI scale 2
 - **Touch**: Novatek `NT36532` over QUPv3_0 SE4 GENI SPI (`0x990000`, wrapper `0x9c0000`, 9.6 MHz, IRQ GPIO39)
 - **Keys**: PM8150 PON `kpdpwr` / `resin` (power, volume down), PM8150 GPIO6 active-low (volume up)
-- **DRAM**: measured 16 GB unit, banks `0x80000000+0x37700000`, `0xc0000000+0x1c0000000`, `0x800000000+0x200000000`
-- **Storage**: UFS 3.1 host controller at `0x01d84000` (APFS OS + SystemOS volumes on `userdata`)
+- **DRAM**: measured 8 GB target, banks `0x80000000+0x3bb00000`, `0xc0000000+0x1c0000000`, span `0x200000000`;
+  the 16 GB reference unit also carried `0x800000000+0x200000000`
+- **Storage**: UFS 3.1 host controller at `0x01d84000` (APFS OS + SystemOS volumes on `userdata`);
+  target `userdata` window `0x293000..0x3b037fa` (242.4 GB)
 - **Battery**: PM8150B fuel gauge + SMB5 charger, 8840 mAh design capacity
 - **Wi-Fi / Bluetooth**: QCA6390 (PCIe0 + QUPv3_0 SE6 GENI UART), carried over and unverified
 - **Target OS**: iPadOS 17.7.11 (build `21H461`, device class `j120ap`)
@@ -133,14 +136,15 @@ a stock or a custom ROM:
 python3 scripts/extract-pipa-firmware.py --skip-pull --provisional
 ```
 
-It prints and stores in `manifest.json` the values this tree still has to re-measure:
+It prints and stores in `manifest.json` the values that identify the unit:
 
-- every `/memory` bank from `/proc/device-tree`, plus `suggested_adt` (`dram_base`, `dram_size`) for the unit;
-  `board.toml` and `dts/pipa.dts` still carry the 16 GB reference unit's map;
-- `MemTotal` and the `userdata` start/size from sysfs, which give the GPT LBA window a 256 GB unit needs;
+- every `/memory` range from `/proc/device-tree`, plus `suggested_adt` (`dram_base`, `dram_size`); the target's
+  two 8 GB ranges and `0x200000000` span are what `board.toml` and `dts/pipa.dts` now carry;
+- `MemTotal` and the `userdata` start/size from sysfs, which is how the 256 GB GPT window was measured;
 - panel name/model, multitouch input device, battery design capacity and display size, which identify the
   panel and touch variant and stay valid regardless of ROM;
-- the kernel version, so a custom kernel is not later mistaken for the stock one.
+- the kernel version and the DT `model`/`compatible`, so a custom kernel or spoofed build props are not later
+  mistaken for stock.
 
 On a ported ROM, the RAM and storage geometry are hardware and can be used directly. The `/vendor` digests and
 kernel version belong to that ROM, so do not copy them into `proprietary-files.txt` as stock values.
@@ -180,10 +184,11 @@ With `pipa-usb=1` the tablet enumerates as a CDC-ACM port (`1209:0001`) and acce
 - No hardware run of this fork. The reference port's results do not transfer automatically to a different
   UEFI build, firmware manifest or `board.toml`.
 - The KTZ8866 backlight, QCA6390 Wi-Fi/Bluetooth, and native USB paths are absent or default-off.
-- The board file carries the **16 GB** reference unit's memory map, including an 8 GiB bank at 32 GiB. An
-  8 GB unit must drop that bank and gets a different `dram_size` and `owned_memory_size`; `--ddr-gb 8` makes
-  `scripts/check-pipa-board.py` fail until it does.
-- `[userdata]` is a **128 GB** unit's window (114.4 GB). A 256 GB unit needs its own `last_lba` from the
-  target GPT, because that window is what the erase step writes. `--storage-gb 256` asserts it.
+- The DRAM map and `[userdata]` window were measured on the target 8 GB / 256 GB unit through its booted
+  ColorOS port: DT `model` is `Qualcomm Technologies, Inc. xiaomi pipa`, banks sum to 7.93 GiB and `userdata`
+  is 242.4 GB. The port's kernel is custom (`4.19.246-N0`), so a stock image should confirm the same DT and GPT
+  before flashing. `--ddr-gb 8 --storage-gb 256` asserts these values.
+- `owned_memory_size` (`0x170000000`) is still the 16 GB reference unit's DarwinBoot window. It fits inside the
+  8 GB span on paper, but only the first UEFI boot can confirm the allocation.
 - `proprietary-files.txt` still has `UNMEASURED` pipa digests and the Adreno 650 digests were recorded on a
   TB-J716F vendor partition.

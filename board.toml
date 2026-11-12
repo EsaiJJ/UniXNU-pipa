@@ -9,11 +9,13 @@ soc_source = "sm8250"
 os_profile = "ipados-17.7.11-21H461"
 description = "Xiaomi Pad 6 (pipa, SM8250-AC) UniXNU bring-up"
 
-# Android's userdata (sda34 on the UFS LUN 0), from the tablet's GPT. The windows are those of UniXNU-sheng: the same target
-# image. "unixnu build userdata" writes the image for it; flashing it erases Android's data.
+# Android's userdata (sda34 on the UFS LUN 0), measured on the target 256 GB unit: first_lba 0x293000 and
+# last_lba 0x3b037fa, i.e. 473448408 512-byte sectors / 242.4 GB. The start matches the 128 GB reference unit,
+# so only the end grows. The windows are those of UniXNU-sheng: the same target image. "unixnu build userdata"
+# writes the image for it; flashing it erases Android's data.
 [userdata]
 first_lba = 0x293000
-last_lba = 0x1d387fa
+last_lba = 0x3b037fa
 lba_bytes = 4096
 windows = [
   { name = "OS", component = "OS" },
@@ -194,16 +196,16 @@ home-button-type = 2
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional trust cache
 # and Data seed. DarwinBoot is part of the firmware volume.
 #
-# This tablet was upgraded to 16 GB in the measured unit. Android's /memory has the banks 0x80000000+0x37700000,
-# 0xc0000000+0x1c0000000 and 0x800000000+0x200000000: the added 8 GiB is a bank of its own at 32 GiB. XNU takes dram-base
-# and dram-size as one range (is_dram_addr, which only picks the attribute of device mappings), so it spans from the base to
-# the end of the last bank; every register block lies below 0x80000000.
+# Measured on the target 8 GB unit from /proc/device-tree/memory (two ranges, 0x80000000+0x3bb00000 and
+# 0xc0000000+0x1c0000000, ending at 0x280000000). XNU takes dram-base and dram-size as one range (is_dram_addr, which only
+# picks the attribute of device mappings), so the span includes the bootloader's 0xbbb00000..0xc0000000 hole; every register
+# block lies below 0x80000000. The 16 GB reference unit also had a bank at 32 GiB, which this unit does not carry.
 [payload]
 volume = "PIPAESP"
 size_mib = 192
 loader = "firmware"
 title = "Xiaomi Pad 6 (iPadOS 17.7.11)"
-dram_size = "0x980000000"
+dram_size = "0x200000000"
 timeout = 3
 kernel_args = [
   "-v",
@@ -274,9 +276,13 @@ confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
 [payload.adt]
 chip_id = "8011"
 unique_chip_id = "required"
+# The DarwinBoot window is a contiguous request, not a hardware value. 0x170000000 (5.75 GiB) is the 16 GB reference
+# port's window (12 of the 34 bootstrap-table pages the XNU patch reserves); it fits inside this 8 GB unit's
+# 0xc0000000..0x280000000 bank on paper, but the first UEFI boot must confirm the allocation succeeds. Do not tune it
+# from host checks alone.
 owned_memory_size = "0x170000000"
 dram_base = "0x80000000"
-dram_size = "0x980000000"
+dram_size = "0x200000000"
 psci_method = "smc"
 ipad_identity = true
 packed_data_ramdisk = true

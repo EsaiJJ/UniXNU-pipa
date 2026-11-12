@@ -6,15 +6,15 @@ This is the CI step that used to be an inline heredoc, plus the cross-checks the
   - board name, SoC, kit, defconfig and device-tree/boot-image paths are the pipa ones;
   - the kernel arguments the port depends on are present and the unported ones are absent;
   - every manifest entry is well formed and at least seven digests are measured;
-  - the memory banks in dts/pipa.dts add up to the DRAM the ADT and payload claim (the 16 GB reference unit's
-    map includes a bank at 32 GiB, which an 8 GB unit must not carry);
+  - the memory banks in dts/pipa.dts add up to the DRAM the ADT and payload claim; --ddr-gb N also asserts the bank
+    total matches that capacity;
   - the [userdata] window is internally consistent, is reported in GiB and GB, and can be asserted against a
     real storage SKU with --storage-gb.
 
 usage: check-pipa-board.py [--board board.toml] [--dts dts/pipa.dts] [--manifest proprietary-files.txt]
                            [--ddr-gb N] [--storage-gb N]
-Exit status 1 on any error. The SKU flags are optional: without them the values are printed as notes, because
-the tree carries the reference unit's numbers until the target's GPT and /memory have been measured.
+Exit status 1 on any error. The SKU flags are optional: without them the measured values are printed as notes;
+with them the bank total and userdata window are asserted against that capacity.
 """
 import argparse
 import re
@@ -115,11 +115,15 @@ def check(args):
     size = (userdata['last_lba'] - userdata['first_lba'] + 1) * userdata['lba_bytes']
     notes.append(f"userdata LBA {userdata['first_lba']:#x}..{userdata['last_lba']:#x} "
                  f"({userdata['lba_bytes']}-byte blocks), {size / 1e9:.1f} GB / {size / 2**30:.1f} GiB")
-    if args.storage_gb is not None and not 0.85 * args.storage_gb * 1e9 <= size <= args.storage_gb * 1e9:
-        errors.append(f'the userdata window is {size / 1e9:.1f} GB, which does not fit a {args.storage_gb} GB unit')
+    if args.storage_gb is not None:
+        if not 0.85 * args.storage_gb * 1e9 <= size <= args.storage_gb * 1e9:
+            errors.append(f'the userdata window is {size / 1e9:.1f} GB, which does not fit a {args.storage_gb} GB unit')
+        else:
+            notes.append(f'the window fits a {args.storage_gb} GB unit; this is the measured GPT, so re-check it '
+                         'if the tablet is ever repartitioned')
     else:
-        notes.append('the window is the reference unit\'s unless --storage-gb confirms it: check the target GPT '
-                     'before flashing, because a wrong last_lba erases the wrong range')
+        notes.append('pass --storage-gb to assert this window against a storage SKU: a wrong last_lba erases the '
+                     'wrong range')
 
     for line in notes:
         print(f'note: {line}')
