@@ -21,9 +21,10 @@ Android 14):
 
 - `NON-HLOS.bin` and `BTFM.bin` are FAT16 filesystems. `image/qca6390/amss20.bin`, `m3.bin` and `bdwlan.elf`
   come from the first; `image/htbtfw20.tlv` and `image/htnv20.bin` come from the second.
-- The Novatek image is compiled into the stock `boot.img` kernel's built-in firmware table. The DT pairs
-  `novatek,display-maker = <0x42>` with the CSOT image; `_tm` belongs to the `0x36` panel variant, so do not use
-  it on this unit. The Himax image in the same table is for the other panel supplier and is not used.
+- The Novatek image is compiled into the stock `boot.img` kernel's built-in firmware table. The live touch DT
+  has two configs: `cfg_0`, display-maker `0x42`, names the CSOT image, and `cfg_1`, display-maker `0x36`, names
+  the `_tm` image. This unit's panel is `m82 42 02 0b`, so use the CSOT file; the Himax image in the same table
+  is for the other panel supplier and is not used.
 - The Adreno 650 files come from the tablet's live `/vendor/firmware` (read through the ported ColorOS ROM, not
   yet cross-checked against the stock `super.img`). `a650_gmu.bin`, `a650_sqe.fw` and `a650_zap.b00`/`.b02` match
   the TB-J716F reference port; `a650_zap.mdt`, `.b01` and `.elf` are device-signed and differ, so only the pipa

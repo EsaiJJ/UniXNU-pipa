@@ -173,7 +173,7 @@ paths = ["drivers/ShengHidInput/**", "drivers/QcomGeniSpi/**", "drivers/ShengNov
 inputs = ["Novatek NT36532 on QUPv3_0 SE4 GENI SPI (0x990000, wrapper 0x9c0000, 9.6 MHz, IRQ GPIO39 rising, CS 11, reset GPIO33, 40x60 matrix, coordinates 0..17999 x 0..28799), panel m82 42 02 0b (display-maker 0x42), and the PM8150 PON keys (kpdpwr, resin, GPIO6 volume up)."]
 configuration = ["board.toml sets pipa-touch=5, pipa-buttons=1, sheng-touch-hid=1, offline-hid-input=1 and offline-hid-home=1.", "The NT36532 point-report firmware (novatek_nt36532_m82_fw_csot.bin) is embedded by the archive builder; the DT pairs display-maker 0x42 with the CSOT image, while the _tm image belongs to the 0x36 panel. Buttons.c is the pipa version without the TB-J716F volume-key swipe injection."]
 procedure = ["Boot with pipa-touch=5, then test multi-touch, the on-screen keyboard and the Power/Volume keys."]
-findings = ["2026-11-13 Resolved the touch firmware selection from the stock kernel's built-in table and the live panel name: panel m82 42 02 0b has display-maker 0x42, so use novatek_nt36532_m82_fw_csot.bin (sha256 ba7d0eb9...); novatek_nt36532_m82_fw_tm.bin is for 0x36 panels. Updated build-gop-legacy-display.py, TouchProbe.cpp and extract-pipa-firmware.py accordingly.", "2026-11-10 Replaced the Goodix GT7386 I2C driver with the pipa Novatek NT36532 GENI SPI path (TouchBoard.h, TouchProbe.cpp, NvtProtocol, NvtTouchCore, GeniSpi) and the upstream pipa Buttons.c."]
+findings = ["2026-11-13 Read the live touch DT node while the tablet was reconnected: /soc/spi@990000/novatek@0 has config-array-size 2, cfg_0 display-maker 0x42 with novatek_nt36532_m82_fw_csot.bin/_mp_csot.bin and cfg_1 display-maker 0x36 with the _tm names; the boot arg is msm_drm.dsi_display0=qcom,mdss_dsi_m82_42_02_0b_dual_dphy_video and input8 is NVTCapacitiveTouchScreen. This confirms the CSOT choice from the device itself.", "2026-11-13 Resolved the touch firmware selection from the stock kernel's built-in table and the live panel name: panel m82 42 02 0b has display-maker 0x42, so use novatek_nt36532_m82_fw_csot.bin (sha256 ba7d0eb9...); novatek_nt36532_m82_fw_tm.bin is for 0x36 panels. Updated build-gop-legacy-display.py, TouchProbe.cpp and extract-pipa-firmware.py accordingly.", "2026-11-10 Replaced the Goodix GT7386 I2C driver with the pipa Novatek NT36532 GENI SPI path (TouchBoard.h, TouchProbe.cpp, NvtProtocol, NvtTouchCore, GeniSpi) and the upstream pipa Buttons.c."]
 completion = ["Touch reports reach IOHIDFamily and the PON keys generate power/volume events."]
 limits = ["The reference port reports touch working on hardware; this fork's integration is untested and the touch blob stays outside the tree."]
 next_action = ["Boot and verify the axes, the 40x60 matrix and the attention-line timing."]
@@ -184,6 +184,13 @@ revision = "421c34bdcaf116bd15b8a895fa81ee483d4d8f31"
 reference = "drivers/QcomGeniSpi/Test/geni-spi.c"
 command = "gcc -std=c11 -O2 -Wall -Wextra -Werror drivers/QcomGeniSpi/Test/geni-spi.c drivers/QcomGeniSpi/GeniSpi.c -o /tmp/geni-spi && /tmp/geni-spi"
 result = "The GENI SPI register-model test and the Novatek protocol/point-report/touch-core host tests pass; hardware is not involved."
+
+[[area.evidence]]
+kind = "host"
+revision = "0ce47495e5eaf9978e0f6504f666f7c34c04948c"
+reference = "scripts/build-gop-legacy-display.py"
+command = "adb shell 'od -An -tx1 /sys/firmware/devicetree/base/soc/spi@990000/novatek@0/novatek,cfg_{0,1}/novatek,display-maker; cat /sys/firmware/devicetree/base/soc/spi@990000/novatek@0/novatek,cfg_{0,1}/novatek,fw-name'"
+result = "Live pipa DT: config-array-size 2; cfg_0 display-maker 0x42 with novatek_nt36532_m82_fw_csot.bin / _mp_csot.bin, cfg_1 display-maker 0x36 with the _tm names. The boot arg names panel m82_42_02_0b and input8 is NVTCapacitiveTouchScreen, matching the CSOT choice."
 
 [[area]]
 id = "gpu"

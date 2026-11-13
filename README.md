@@ -20,7 +20,8 @@ someone boots it.
 - **GPU**: Qualcomm Adreno 650 (`0x06050002`)
 - **Display**: 11" 1800x2880 panel `m82 42 02 0b` (display-maker `0x42`), UEFI GOP scanout at `0x9c000000`, UI scale 2
 - **Touch**: Novatek `NT36532` over QUPv3_0 SE4 GENI SPI (`0x990000`, wrapper `0x9c0000`, 9.6 MHz, IRQ GPIO39);
-  the stock kernel's built-in firmware table pairs `0x42` with `novatek_nt36532_m82_fw_csot.bin`
+  the live DT's `cfg_0` (display-maker `0x42`) and the stock kernel's built-in firmware table both name
+  `novatek_nt36532_m82_fw_csot.bin`
 - **Keys**: PM8150 PON `kpdpwr` / `resin` (power, volume down), PM8150 GPIO6 active-low (volume up)
 - **DRAM**: measured 8 GB target, banks `0x80000000+0x3bb00000`, `0xc0000000+0x1c0000000`, span `0x200000000`;
   the 16 GB reference unit also carried `0x800000000+0x200000000`
