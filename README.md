@@ -115,6 +115,37 @@ The archive builders need a few firmware files outside Git (paths are overridabl
 `proprietary-files.txt` records the measured digests and their provenance (official stock image or live
 partition). The binaries themselves stay outside Git; either extractor below writes them to a private directory.
 
+## Booting Without Flashing
+
+The boot image can be started once from RAM, without writing a partition:
+
+```sh
+adb reboot bootloader          # bootloader fastboot, not fastbootd
+fastboot devices
+fastboot boot ../UniXNU/out/pipa/*/*/boot/boot.img
+```
+
+`fastboot boot` transfers the image and starts it once. It does not write `boot`, `boot_a`/`boot_b`,
+`vendor_boot` or `userdata`, so Android remains bootable. The reference pipa port used exactly this path on
+hardware: its 204 MB payload image was accepted by `fastboot boot`, the firmware reached the UniXNU menu, and
+XNU stopped at `Failed to mount root device` without a root image. This is also the practical route for this
+fork: the `PIPAESP` payload alone is 192 MiB, larger than the stock 128 MiB `boot.img`, so do not assume the
+assembled image fits the `boot` partition. Boot it from RAM.
+
+What the no-flash run can prove, in order: BootShim and the UEFI FD load, the ADT/memory map and the menu draw,
+and - with the payload in the image - DarwinBoot hands over and XNU starts. Without the userdata root image,
+XNU cannot mount the root and stops or panics; that is expected and still counts as first-boot evidence. A
+firmware-only image built with `unixnu bootimg --ramdisk none` stops at the menu and is the smallest first
+test.
+
+It does not install iPadOS. The OS and SystemOS volumes live in `userdata`; `fastboot flash userdata
+out/pipa/*/*/userdata/userdata-root.img` is the one destructive step and erases Android's apps and data. Do it
+only after the read-only run, and only when that loss is intended.
+
+If the panel stays black or the tablet does not return to fastboot, hold Power for about ten seconds, or
+Power + Volume Down to enter fastboot. Nothing was written, so a reset boots Android again. In the menu, do not
+select an install entry: entries with `confirm` are skipped by the countdown for this reason.
+
 ## Extracting Firmware From a Stock ROM
 
 An official fastboot ROM is the preferred source: its digests are reproducible and it carries the `dtbo` and
