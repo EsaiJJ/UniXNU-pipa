@@ -61,7 +61,7 @@ result = "Validates the pipa platform files, the pipa.toml boot-image keys, the 
 
 [[area.evidence]]
 kind = "host"
-revision = "125855a9142ed0cbf53a70adccd87f532c118454"
+revision = "d17858f84c3fae46088a1069a253b8f4ae275e39"
 reference = "scripts/extract-stock-firmware.py"
 command = "python3 scripts/extract-stock-firmware.py --images <rom>/images --touch --vmlinux-to-elf <venv>/bin/vmlinux-to-elf"
 result = "On pipa_global_images_OS2.0.16.0.UMZMIXM_14.0: 11 stock images hashed, 54 modem + 4 Bluetooth + 5 built-in touch files extracted, dtbo entry 16 identified as xiaomi pipa, 0 digest mismatches and 0 errors against proprietary-files.txt."
@@ -140,7 +140,7 @@ result = "On the target unit, measured userdata as /dev/block/sda34, start secto
 
 [[area.evidence]]
 kind = "host"
-revision = "125855a9142ed0cbf53a70adccd87f532c118454"
+revision = "d17858f84c3fae46088a1069a253b8f4ae275e39"
 reference = "scripts/extract-stock-firmware.py"
 command = "python3 scripts/extract-stock-firmware.py --images <rom>/images"
 result = "The stock template GPT is 4K-LBA with 64 entries and 34 partitions; its userdata entry is zero-length at 0x293000 because the template LUN ends there, so the live sda34 window (last_lba 0x3b037fa) stays authoritative."
