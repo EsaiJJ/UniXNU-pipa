@@ -475,11 +475,12 @@ zap_c.write_text(
     f'const uint32_t native_gpu_zap_firmware_size = {len(zap_blob)};\n'
 )
 
-# The Novatek NT36532 firmware (novatek_nt36532_m82_fw_tm.bin of the tablet's stock kernel, its built-in firmware table:
-# the panel is the "36" one, whose maker 0x36 the DT pairs with the _tm image). Kept outside Git in
+# The Novatek NT36532 firmware (novatek_nt36532_m82_fw_csot.bin of the tablet's stock kernel, its built-in firmware
+# table: the panel is m82 42 02 0b, whose display-maker 0x42 the DT pairs with the CSOT image; the _tm image belongs
+# to display-maker 0x36 panels). Kept outside Git in
 # .cache/firmware/touch; PIPA_TOUCH_FIRMWARE overrides it. TouchProbe.cpp host-downloads this at stage 4.
-touch_firmware = find_fw('PIPA_TOUCH_FIRMWARE', ('.cache/firmware/touch/novatek_nt36532_m82_fw_tm.bin',
-                                                 'firmware/touch/novatek_nt36532_m82_fw_tm.bin'))
+touch_firmware = find_fw('PIPA_TOUCH_FIRMWARE', ('.cache/firmware/touch/novatek_nt36532_m82_fw_csot.bin',
+                                                 'firmware/touch/novatek_nt36532_m82_fw_csot.bin'))
 require(touch_firmware.is_file(), f'Missing touch firmware {touch_firmware}')
 touch_blob = touch_firmware.read_bytes()
 require(len(touch_blob) > 4096 and (touch_blob[-4096] + touch_blob[-4095]) & 0xff == 0xff,

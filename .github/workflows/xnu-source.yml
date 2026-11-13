@@ -43,6 +43,7 @@ jobs:
           test -s /tmp/pipa-hardware.dtb
           python3 scripts/check-pipa.py
           python3 scripts/check-pipa-board.py
+          python3 -m py_compile scripts/*.py
 
       - name: Compile and run Pipa board helper tests (GCC and Clang -Werror)
         run: |

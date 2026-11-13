@@ -23,7 +23,8 @@ What it does:
 The adb serial is recorded only as a truncated SHA-256: it is a provenance key, not something to publish.
 
 The Novatek NT36532 firmware is normally built into the stock kernel image, so it will not appear under /vendor;
-the manifest notes that it must come from vendor_boot/boot (unpack_bootimg) and is left UNMEASURED on purpose.
+the manifest notes that it comes from the stock boot image's built-in firmware table instead
+(scripts/extract-stock-firmware.py --touch). This adb run does not claim the custom ROM's kernel blob as stock.
 
 usage: extract-pipa-firmware.py [--out DIR] [--serial SERIAL] [--force] [--skip-pull] [--provisional]
 Output: DIR/manifest.json, DIR/manifest.tsv, DIR/root/... and DIR/dtb/fdt.dtb when readable.
@@ -60,7 +61,6 @@ PULL = [
 
 # Consumer names in proprietary-files.txt that this run is expected to measure.
 EXPECTED = {
-    'firmware/novatek_nt36532_m82_fw_tm.bin',
     'firmware/WCNSS_qcom_cfg_qca6390.ini',
     'image/qca6390/amss20.bin',
     'image/qca6390/m3.bin',
@@ -274,7 +274,7 @@ def rel_to_manifest(relative):
         return f'image/qca6390/{name}'
     if name in {'htbtfw20.tlv', 'htnv20.bin'}:
         return f'image/{name}'
-    if name == 'novatek_nt36532_m82_fw_tm.bin':
+    if name in {'novatek_nt36532_m82_fw_csot.bin', 'novatek_nt36532_m82_fw_tm.bin'}:
         return f'firmware/{name}'
     # The Adreno 650 images in proprietary-files.txt were recorded on a TB-J716F; pulling the pipa copies lets the
     # manifest say whether the shared SM8250-AC firmware really is byte-identical.
@@ -346,9 +346,10 @@ def main():
             entry['matches_recorded'] = entry['recorded_sha256'] == entry['sha256']
 
     notes = {
-        'novatek': 'NT36532 firmware is built into the stock kernel image; extract it from vendor_boot/boot, '
-                   'not from /vendor, and record the kernel build it came from.',
-        'unmeasured': 'Replace UNMEASURED in proprietary-files.txt only with a digest from this manifest.',
+        'novatek': 'NT36532 firmware is built into the stock boot.img kernel, not /vendor; extract it with '
+                   'scripts/extract-stock-firmware.py --touch and record the ROM build it came from.',
+        'unmeasured': 'Record a digest in proprietary-files.txt only when the manifest names the same source '
+                      '(stock image or live partition) the digest came from.',
         'sku': 'Compare device_facts with [userdata] first_lba/last_lba and the DRAM map in board.toml: both are '
                'per-SKU. The tree carries this 8 GB / 256 GB unit\'s measured values; re-run on a different unit '
                'before flashing it.',

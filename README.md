@@ -18,8 +18,9 @@ someone boots it.
 - **SoC**: Qualcomm SM8250-AC (Snapdragon 870)
 - **CPU**: 8-core Kryo 585 (1x Cortex-A77 prime + 3x Cortex-A77 + 4x Cortex-A55), MPIDR `0x000..0x700`
 - **GPU**: Qualcomm Adreno 650 (`0x06050002`)
-- **Display**: 11" 1800x2880 panel, UEFI GOP scanout at `0x9c000000`, UI scale 2
-- **Touch**: Novatek `NT36532` over QUPv3_0 SE4 GENI SPI (`0x990000`, wrapper `0x9c0000`, 9.6 MHz, IRQ GPIO39)
+- **Display**: 11" 1800x2880 panel `m82 42 02 0b` (display-maker `0x42`), UEFI GOP scanout at `0x9c000000`, UI scale 2
+- **Touch**: Novatek `NT36532` over QUPv3_0 SE4 GENI SPI (`0x990000`, wrapper `0x9c0000`, 9.6 MHz, IRQ GPIO39);
+  the stock kernel's built-in firmware table pairs `0x42` with `novatek_nt36532_m82_fw_csot.bin`
 - **Keys**: PM8150 PON `kpdpwr` / `resin` (power, volume down), PM8150 GPIO6 active-low (volume up)
 - **DRAM**: measured 8 GB target, banks `0x80000000+0x3bb00000`, `0xc0000000+0x1c0000000`, span `0x200000000`;
   the 16 GB reference unit also carried `0x800000000+0x200000000`
@@ -53,7 +54,9 @@ UniXNU-pipa/
 ├── board.toml                           # Format 2 board specification
 ├── porting.toml                         # Porting record (implementation status, not device verification)
 ├── feeds.toml                           # Shared dependencies and upstream commits
-├── proprietary-files.txt                # Firmware manifest; pipa-only digests still UNMEASURED
+├── proprietary-files.txt                # Firmware digests and stock-ROM provenance; blobs stay outside Git
+├── firmware/
+│   └── README.md                        # Where the extracted blobs go and how they were identified
 ├── configs/
 │   └── pipa_defconfig                   # Kernel build configuration
 ├── dts/
@@ -79,6 +82,7 @@ UniXNU-pipa/
     ├── check-pipa.py                    # Firmware preflight and boot DTB staging
     ├── check-pipa-board.py              # board.toml / DTS / firmware-manifest and SKU checks
     ├── extract-pipa-firmware.py         # Host-side identity + firmware pull and SHA-256 manifest
+    ├── extract-stock-firmware.py        # Stock fastboot ROM: FAT16, dtbo, boot built-in firmware, digests
     ├── read-pipa-log.py                 # Ramoops reader over `fastboot boot`
     └── package.sh                       # UniXNU release wrapper (do not edit)
 ```
@@ -103,12 +107,38 @@ descriptors and the firmware inputs, and records `hardware_boot_demonstrated: fa
 
 The archive builders need a few firmware files outside Git (paths are overridable through `PIPA_*` variables):
 
-- `.cache/firmware/gpu/a650_gmu.bin`, `a650_zap.elf` - the vendor `/firmware` partition
-- `.cache/firmware/linux-firmware/a650_sqe.fw` - linux-firmware `qcom/a650_sqe.fw`
-- `.cache/firmware/touch/novatek_nt36532_m82_fw_tm.bin` - the stock kernel's built-in `_tm` image
+- `.cache/firmware/gpu/a650_gmu.bin`, `a650_sqe.fw`, `a650_zap.elf` - the pipa `/vendor/firmware` partition
+  (read through the ported ColorOS ROM; the builder also accepts linux-firmware `qcom/a650_sqe.fw` as a fallback)
+- `.cache/firmware/touch/novatek_nt36532_m82_fw_csot.bin` - the stock kernel's built-in image for panel `m82 42 02 0b`
 
-`proprietary-files.txt` lists the remaining Wi-Fi/Bluetooth images and marks the pipa-only digests as
-`UNMEASURED` until they are extracted and hashed.
+`proprietary-files.txt` records the measured digests and their provenance (official stock image or live
+partition). The binaries themselves stay outside Git; either extractor below writes them to a private directory.
+
+## Extracting Firmware From a Stock ROM
+
+An official fastboot ROM is the preferred source: its digests are reproducible and it carries the `dtbo` and
+`vendor_boot` the UEFI build expects. Unpack the `.tgz`, then point the host-side extractor at its `images/`
+directory:
+
+```sh
+python3 scripts/extract-stock-firmware.py --images ~/pipa-firmware/stock/<rom>/images --touch
+```
+
+It hashes every stock image and then reads the files the way the tablet's boot chain does:
+
+- `NON-HLOS.bin` and `BTFM.bin` are FAT16 filesystems (not ext4 or sparse images); it walks them and extracts
+  `image/qca6390/*` and the four `image/ht*` Bluetooth files;
+- `dtbo.img` uses the big-endian AOSP header and 32-byte entries; it extracts the one entry whose DT model says
+  `xiaomi pipa` (entry 16, board-id `0x34`, both m82 panels and `novatek@0`), and `--all-dtbo` writes all 29;
+- the `gpt_both*.bin` templates are parsed per LUN; the stock LUN 0 template ends `userdata` at `0x293000`
+  (`last_lba` `0x292fff`, zero sectors), which is why the live `sda34` window is the authority;
+- `--touch` extracts the kernel from `boot.img` and reads its built-in firmware table. It runs
+  `vmlinux-to-elf` for the symbol names (set `VMLINUX_TO_ELF` or `--vmlinux-to-elf` if it is in a virtualenv),
+  then pairs each `_fw_*_name` with its `_fw_*_bin_bin` and the size in `__start_builtin_fw`. This is the only
+  stock source for the NT36532 image, which is compiled into the kernel rather than stored in `/vendor`.
+
+The run writes `manifest.json`/`manifest.tsv` and compares every digest with `proprietary-files.txt`, so a
+mismatch is visible before anything is committed. The extracted blobs belong outside this checkout.
 
 ## Extracting Firmware From the Tablet
 
@@ -149,10 +179,10 @@ It prints and stores in `manifest.json` the values that identify the unit:
 On a ported ROM, the RAM and storage geometry are hardware and can be used directly. The `/vendor` digests and
 kernel version belong to that ROM, so do not copy them into `proprietary-files.txt` as stock values.
 
-The Novatek `NT36532` touch firmware is normally built into the stock kernel, so it comes from
-`vendor_boot`/`boot` (via `unpack_bootimg`), not from `/vendor`; the extractor leaves it `UNMEASURED` on
-purpose rather than recording a custom-kernel blob as stock. Replace `UNMEASURED` only with digests from this
-manifest.
+The Novatek `NT36532` touch firmware is built into the stock kernel, not stored in `/vendor`, so the adb
+extractor deliberately does not record a custom-kernel blob as stock; use the stock-ROM extractor's `--touch`
+path for it. The panel is `m82 42 02 0b`, whose display-maker `0x42` selects the CSOT image; the `_tm` image
+belongs to the `0x36` panel variant.
 
 ## Boot Arguments
 
@@ -186,9 +216,13 @@ With `pipa-usb=1` the tablet enumerates as a CDC-ACM port (`1209:0001`) and acce
 - The KTZ8866 backlight, QCA6390 Wi-Fi/Bluetooth, and native USB paths are absent or default-off.
 - The DRAM map and `[userdata]` window were measured on the target 8 GB / 256 GB unit through its booted
   ColorOS port: DT `model` is `Qualcomm Technologies, Inc. xiaomi pipa`, banks sum to 7.93 GiB and `userdata`
-  is 242.4 GB. The port's kernel is custom (`4.19.246-N0`), so a stock image should confirm the same DT and GPT
-  before flashing. `--ddr-gb 8 --storage-gb 256` asserts these values.
+  is 242.4 GB. The stock ROM confirms the same panel/DT strings, but its template `gpt_both0.bin` ends
+  `userdata` at the LUN boundary (`0x293000`), so the live `sda34` geometry is the authority. The port's kernel
+  is custom (`4.19.246-N0`), so a stock boot is still the final confirmation. `--ddr-gb 8 --storage-gb 256`
+  asserts these values.
 - `owned_memory_size` (`0x170000000`) is still the 16 GB reference unit's DarwinBoot window. It fits inside the
   8 GB span on paper, but only the first UEFI boot can confirm the allocation.
-- `proprietary-files.txt` still has `UNMEASURED` pipa digests and the Adreno 650 digests were recorded on a
-  TB-J716F vendor partition.
+- The firmware digests are measured: the QCA6390/BTFM and touch images come from the official stock ROM, while
+  the Adreno 650 and WCNSS config were read from the live `/vendor` (not yet cross-checked against `super.img`).
+  `a650_zap.mdt`, `.b01` and `.elf` are pipa-signed and differ from the TB-J716F images the fork originally
+  carried; use the values in `proprietary-files.txt` for hardware runs.

@@ -1,24 +1,33 @@
 # Required firmware inputs: relative path | source | SHA-256 | consumer
 # Private firmware binaries stay outside this public repository (.cache/firmware/).
 #
-# The Adreno 650 images (a650_*) are the shared SM8250-AC vendor firmware; their digests were recorded from the
-# TB-J716F vendor partition and are the ones this fork already builds against. The Xiaomi Pad 6 vendor partition
-# should be re-verified against them, or the digests updated from its /firmware (extracted with dump.erofs).
+# The Adreno 650 images (a650_*) are the shared SM8250-AC vendor firmware. The digests below were measured on this
+# pipa unit's /vendor/firmware through the booted ColorOS port (not yet cross-checked against the stock super.img):
+# a650_gmu.bin, a650_sqe.fw and a650_zap.b00/.b02 match the TB-J716F values, but a650_zap.mdt, .b01 and .elf are
+# device-signed and differ, so the pipa values are recorded here.
 #
-# The Xiaomi Pad 6 images marked UNMEASURED are not in this checkout, so no digest is claimed: extract them from the
-# tablet (touch: the stock kernel's built-in firmware table; Wi-Fi/Bluetooth: the modem_a/b and bluetooth_a/b
-# partitions) into .cache/firmware/ and replace UNMEASURED with the measured SHA-256.
-firmware/a650_gmu.bin | SM8250-AC vendor /firmware (a650_gmu.bin; digest recorded on TB-J716F) | df79fa8482fcc7587bb239b9c9e2b24bce4729893b990fe3f82b30da8175b01c | Adreno 650 GMU
-firmware/a650_sqe.fw | SM8250-AC vendor /firmware (a650_sqe.fw; digest recorded on TB-J716F) | b4c27420fd6a5c6b511b254cc0fad8cdd40eea38ceb3418f895a1084f4460487 | Adreno 650 CP SQE
-firmware/a650_zap.mdt | SM8250-AC vendor /firmware (a650_zap.mdt; digest recorded on TB-J716F) | e80c4e572107a4d97f8cef3ba651d6c7798008d7a30cc457af09605cc90e6a72 | Adreno 650 ZAP PAS 13
-firmware/a650_zap.b00 | SM8250-AC vendor /firmware (a650_zap.b00; digest recorded on TB-J716F) | ec9b9d5a67456384809624b14a00d15d36297e5f2e75728504cd872bc95e0947 | Adreno 650 ZAP PAS 13
-firmware/a650_zap.b01 | SM8250-AC vendor /firmware (a650_zap.b01; digest recorded on TB-J716F) | 520c1924eadda0ee9c6b56c2839dac274a5cb63a28d90d51dfc89b8001915ee8 | Adreno 650 ZAP PAS 13
-firmware/a650_zap.b02 | SM8250-AC vendor /firmware (a650_zap.b02; digest recorded on TB-J716F) | a415e5452fa8f597670a6e51010e97bfabca7d20fbce8044caed64d9d5873113 | Adreno 650 ZAP PAS 13
-firmware/a650_zap.elf | SM8250-AC vendor /firmware (a650_zap.elf; digest recorded on TB-J716F) | 45863d11e234032c135d18edc5b2361795060a29217c4716ab634cc5440da759 | Adreno 650 ZAP PAS 13
-firmware/novatek_nt36532_m82_fw_tm.bin | Xiaomi Pad 6 stock kernel built-in firmware table (panel maker 0x36) | UNMEASURED | Novatek NT36532 touch
-firmware/WCNSS_qcom_cfg_qca6390.ini | Xiaomi Pad 6 vendor (QCA6390 BDF) | UNMEASURED | QCA6390 Wi-Fi
-image/qca6390/amss20.bin | Xiaomi Pad 6 modem_a/modem_b (image/qca6390) | UNMEASURED | QCA6390 Wi-Fi AMSS
-image/qca6390/m3.bin | Xiaomi Pad 6 modem_a/modem_b (image/qca6390) | UNMEASURED | QCA6390 Wi-Fi M3
-image/qca6390/bdwlan.elf | Xiaomi Pad 6 modem_a/modem_b (image/qca6390) | UNMEASURED | QCA6390 Wi-Fi board data
-image/htbtfw20.tlv | Xiaomi Pad 6 bluetooth_a/bluetooth_b | UNMEASURED | QCA6390 Bluetooth TLV
-image/htnv20.bin | Xiaomi Pad 6 bluetooth_a/bluetooth_b | UNMEASURED | QCA6390 Bluetooth NVM
+# The QCA6390 and Bluetooth digests come from the official pipa fastboot ROM
+# pipa_global_images_OS2.0.16.0.UMZMIXM_14.0 (HyperOS 2.0.16, Android 14): NON-HLOS.bin and BTFM.bin are FAT16
+# images. The Bluetooth pair is byte-identical to the live /vendor/bt_firmware copy. The Wi-Fi config comes from the
+# live /vendor/etc/wifi/qca6390 (ColorOS port); unpack the stock super.img if a stock digest is needed.
+#
+# The touch firmware is not in /vendor; it is built into the stock boot.img kernel, whose built-in firmware table
+# matches panel m82 42 02 0b (display-maker 0x42 -> the CSOT image; the _tm image belongs to display-maker 0x36
+# panels).
+#
+# Extract with scripts/extract-stock-firmware.py (host side, no tablet needed) or scripts/extract-pipa-firmware.py
+# (booted tablet). The blobs stay outside Git; this file publishes only their digests and provenance.
+firmware/a650_gmu.bin | pipa live /vendor/firmware (a650_gmu.bin; ColorOS port; matches TB-J716F) | df79fa8482fcc7587bb239b9c9e2b24bce4729893b990fe3f82b30da8175b01c | Adreno 650 GMU
+firmware/a650_sqe.fw | pipa live /vendor/firmware (a650_sqe.fw; ColorOS port; matches TB-J716F) | b4c27420fd6a5c6b511b254cc0fad8cdd40eea38ceb3418f895a1084f4460487 | Adreno 650 CP SQE
+firmware/a650_zap.mdt | pipa live /vendor/firmware (a650_zap.mdt; ColorOS port; pipa device signature) | 5324ed6502371ea8790b0d085a28caa5e46c68f38db79385a0461640955c4f88 | Adreno 650 ZAP PAS 13
+firmware/a650_zap.b00 | pipa live /vendor/firmware (a650_zap.b00; ColorOS port; matches TB-J716F) | ec9b9d5a67456384809624b14a00d15d36297e5f2e75728504cd872bc95e0947 | Adreno 650 ZAP PAS 13
+firmware/a650_zap.b01 | pipa live /vendor/firmware (a650_zap.b01; ColorOS port; pipa device signature) | e5c726b71a1048648ee4107e8939c6ead7e3fff53e20b33c87451031861fce96 | Adreno 650 ZAP PAS 13
+firmware/a650_zap.b02 | pipa live /vendor/firmware (a650_zap.b02; ColorOS port; matches TB-J716F) | a415e5452fa8f597670a6e51010e97bfabca7d20fbce8044caed64d9d5873113 | Adreno 650 ZAP PAS 13
+firmware/a650_zap.elf | pipa live /vendor/firmware (a650_zap.elf; ColorOS port; pipa device signature) | 442b58bd2be36db42941a6cfe1ad44dccab169de44aa2b6011838a67a436230d | Adreno 650 ZAP PAS 13
+firmware/WCNSS_qcom_cfg_qca6390.ini | pipa live /vendor/etc/wifi/qca6390/WCNSS_qcom_cfg.ini (ColorOS port; stock super.img not checked) | b67274723716e449279567d103bbf2e29610073cf3feb3d0f97b3483a174d669 | QCA6390 Wi-Fi
+firmware/novatek_nt36532_m82_fw_csot.bin | pipa stock boot.img built-in firmware (panel m82 42 02 0b, display-maker 0x42) | ba7d0eb9b68a8a6bbbad487f9fb8103e2a142092fdcc4daea5514bb119aa4cdb | Novatek NT36532 touch
+image/qca6390/amss20.bin | pipa stock NON-HLOS.bin (FAT16 image/qca6390) | dd8d8355b368af77fefd25f7b8d5b66476a042427f98365242973f438577262e | QCA6390 Wi-Fi AMSS
+image/qca6390/m3.bin | pipa stock NON-HLOS.bin (FAT16 image/qca6390) | 936a00c4eb759caa321af63946cb2541bafee19f9066ca1af5dbf94e164ba61b | QCA6390 Wi-Fi M3
+image/qca6390/bdwlan.elf | pipa stock NON-HLOS.bin (FAT16 image/qca6390) | a3ee9de2c77edd268c023eaae55a79177df5619ba2f0be252232919dae549f4f | QCA6390 Wi-Fi board data
+image/htbtfw20.tlv | pipa stock BTFM.bin (FAT16 image/htbtfw20.tlv; byte-identical to /vendor/bt_firmware) | 37293f3583b9ebbbb6e7b5db7f3c8265bf732e4d56e10901a3ea5d93b6cb8968 | QCA6390 Bluetooth TLV
+image/htnv20.bin | pipa stock BTFM.bin (FAT16 image/htnv20.bin; byte-identical to /vendor/bt_firmware) | 7357f445b61276093820c8ec4a53e4988be286bbbc728b3e3527c5f146cfc182 | QCA6390 Bluetooth NVM
